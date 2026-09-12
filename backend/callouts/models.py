@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -122,11 +123,39 @@ class AnnouncementRecipient(models.Model):
 
     class Meta:
         constraints = [
+            models.CheckConstraint(
+                condition=models.Q(acknowledged_at__isnull=True) | models.Q(read_at__isnull=False),
+                name='acknowledged_requires_read',
+            ),
             models.UniqueConstraint(
                 fields=['announcement', 'member'],
                 name='unique_announcement_member',
             ),
         ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        local_errors = []
+
+        if self.local_id and self.announcement_id and self.local_id != self.announcement.local_id:
+            local_errors.append('Local must match the announcement local.')
+
+        if self.local_id and self.member_id and self.local_id != self.member.local_id:
+            local_errors.append('Local must match the member local.')
+
+        if self.acknowledged_at and not self.read_at:
+            errors['acknowledged_at'] = 'Acknowledged time requires read time.'
+
+        if local_errors:
+            errors['local'] = local_errors
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f'{self.announcement} - {self.member}'

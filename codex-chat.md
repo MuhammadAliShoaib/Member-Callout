@@ -122,3 +122,14 @@ Fields:
 - created_at
 
 Add UNIQUE(announcement, member).
+
+### User Prompt
+
+Add database validation to AnnouncementRecipient.
+
+Requirements:
+- local must match announcement.local
+- local must match member.local
+- acknowledged_at cannot exist without read_at
+
+Keep tenant isolation enforced wherever practical at database/model level.
