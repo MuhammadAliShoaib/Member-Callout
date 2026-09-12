@@ -7,7 +7,7 @@ from callouts.tenant import request_local_id
 class IsActiveLeaderInOwnLocal(BasePermission):
     def has_permission(self, request, view):
         user = request.user
-        return (
+        return bool(
             user
             and user.is_authenticated
             and user.is_active
