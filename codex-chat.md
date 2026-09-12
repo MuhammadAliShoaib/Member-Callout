@@ -153,3 +153,42 @@ Fields:
 - updated_at
 
 All counters default to 0 and cannot be negative.
+
+### User Prompt
+
+Create a re-runnable Django command:
+
+python manage.py seed_data
+
+Create:
+- Local 27
+- Local 99
+- ~2000 members in Local 27
+- ~200 members in Local 99
+- 3-4 classifications
+- mostly active members
+
+Do not create test accounts yet.
+
+### User Prompt
+
+Update seed_data to create:
+
+- one leader account for Local 27
+- one member account for Local 27
+- one leader account for Local 99
+- one member account for Local 99
+
+Use deterministic emails and passwords.
+Print the credentials after seeding.
+
+### User Prompt
+
+Update seed_data to create one already-sent announcement for Local 27.
+
+Also create:
+- recipient records
+- realistic read/acknowledged states
+- matching AnnouncementStats
+
+The seed command must remain re-runnable without duplicates.
