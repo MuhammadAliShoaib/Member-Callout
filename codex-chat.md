@@ -133,3 +133,23 @@ Requirements:
 - acknowledged_at cannot exist without read_at
 
 Keep tenant isolation enforced wherever practical at database/model level.
+
+## 2026-09-13
+
+### User Prompt
+
+Create AnnouncementStats.
+
+Fields:
+- announcement: one-to-one
+- local
+- target_count
+- sent_count
+- failed_count
+- read_count
+- acknowledged_count
+- coming_count
+- cant_come_count
+- updated_at
+
+All counters default to 0 and cannot be negative.

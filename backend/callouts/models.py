@@ -159,3 +159,45 @@ class AnnouncementRecipient(models.Model):
 
     def __str__(self):
         return f'{self.announcement} - {self.member}'
+
+
+class AnnouncementStats(models.Model):
+    announcement = models.OneToOneField(Announcement, on_delete=models.CASCADE, related_name='stats')
+    local = models.ForeignKey(Local, on_delete=models.PROTECT, related_name='announcement_stats')
+    target_count = models.PositiveIntegerField(default=0)
+    sent_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    read_count = models.PositiveIntegerField(default=0)
+    acknowledged_count = models.PositiveIntegerField(default=0)
+    coming_count = models.PositiveIntegerField(default=0)
+    cant_come_count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(target_count__gte=0)
+                    & models.Q(sent_count__gte=0)
+                    & models.Q(failed_count__gte=0)
+                    & models.Q(read_count__gte=0)
+                    & models.Q(acknowledged_count__gte=0)
+                    & models.Q(coming_count__gte=0)
+                    & models.Q(cant_come_count__gte=0)
+                ),
+                name='announcement_stats_counts_non_negative',
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        if self.local_id and self.announcement_id and self.local_id != self.announcement.local_id:
+            raise ValidationError({'local': 'Local must match the announcement local.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'Stats for {self.announcement}'
