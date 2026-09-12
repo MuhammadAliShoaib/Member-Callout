@@ -7,7 +7,7 @@ from rest_framework.decorators import permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from callouts.ai import get_announcement_draft_ai
+from callouts.ai import AIError, get_announcement_draft_ai
 from callouts.models import Announcement
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
@@ -84,7 +84,15 @@ def announcement_ai_draft(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    return Response(get_announcement_draft_ai().draft(note))
+    try:
+        draft = get_announcement_draft_ai().draft(note)
+    except AIError as exc:
+        return Response(
+            {'detail': exc.detail},
+            status=exc.status_code,
+        )
+
+    return Response(draft)
 
 
 @api_view(['GET'])

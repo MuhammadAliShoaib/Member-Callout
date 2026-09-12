@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
-from callouts.ai import FakeAnnouncementDraftAI
+from callouts.ai import (
+    AIInvalidResponseError,
+    AIProviderError,
+    AITimeoutError,
+    FakeAnnouncementDraftAI,
+    validate_draft_response,
+)
 from callouts.models import Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 
@@ -119,3 +125,16 @@ class AnnouncementDraftTests(SimpleTestCase):
         self.assertIn('body', draft)
         self.assertIn('push_preview', draft)
         self.assertLessEqual(len(draft['push_preview']), 120)
+
+    def test_invalid_ai_response_is_rejected(self):
+        with self.assertRaises(AIInvalidResponseError):
+            validate_draft_response({
+                'title': 'Meeting',
+                'body': 'Meeting tonight.',
+                'push_preview': 'x' * 121,
+            })
+
+    def test_ai_errors_have_safe_status_codes(self):
+        self.assertEqual(AITimeoutError.status_code, 504)
+        self.assertEqual(AIProviderError.status_code, 502)
+        self.assertEqual(AIInvalidResponseError.status_code, 502)

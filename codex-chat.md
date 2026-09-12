@@ -291,6 +291,17 @@ The project must work without evaluator AI credentials.
 
 ### User Prompt
 
+Add AI error handling.
+
+Handle:
+- timeout
+- provider failure
+- invalid response
+
+AI failure must never trigger announcement sending.
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.
