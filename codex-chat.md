@@ -102,3 +102,23 @@ Fields:
 
 Status:
 draft | confirmed | queued | sent
+
+### User Prompt
+
+Create AnnouncementRecipient.
+
+Fields:
+- id: UUID
+- local
+- announcement
+- member
+- classification_snapshot
+- delivery_status: pending | sent | failed
+- sent_at
+- read_at
+- acknowledged_at
+- rsvp: nullable
+- rsvp_at: nullable
+- created_at
+
+Add UNIQUE(announcement, member).

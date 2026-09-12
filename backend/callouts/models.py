@@ -95,3 +95,38 @@ class Announcement(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class AnnouncementRecipient(models.Model):
+    class DeliveryStatus(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        SENT = 'sent', 'Sent'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    local = models.ForeignKey(Local, on_delete=models.PROTECT, related_name='announcement_recipients')
+    announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name='recipients')
+    member = models.ForeignKey(Member, on_delete=models.PROTECT, related_name='announcement_recipients')
+    classification_snapshot = models.CharField(max_length=255)
+    delivery_status = models.CharField(
+        max_length=20,
+        choices=DeliveryStatus.choices,
+        default=DeliveryStatus.PENDING,
+    )
+    sent_at = models.DateTimeField(blank=True, null=True)
+    read_at = models.DateTimeField(blank=True, null=True)
+    acknowledged_at = models.DateTimeField(blank=True, null=True)
+    rsvp = models.CharField(max_length=255, blank=True, null=True)
+    rsvp_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['announcement', 'member'],
+                name='unique_announcement_member',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.announcement} - {self.member}'
