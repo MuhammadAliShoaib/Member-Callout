@@ -6,6 +6,10 @@ from rest_framework.decorators import permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from callouts.models import Announcement
+from callouts.permissions import IsActiveLeaderInOwnLocal
+from callouts.serializers import AnnouncementSerializer
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -47,4 +51,20 @@ def login(request):
                 'role': member.role,
             },
         }
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcements(request):
+    serializer = AnnouncementSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    announcement = serializer.save(
+        local=request.user.local,
+        created_by=request.user,
+        status=Announcement.Status.DRAFT,
+    )
+    return Response(
+        AnnouncementSerializer(announcement).data,
+        status=status.HTTP_201_CREATED,
     )
