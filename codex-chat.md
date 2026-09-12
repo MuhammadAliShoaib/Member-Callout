@@ -73,3 +73,9 @@ Fields:
 Use email for authentication.
 
 A Member belongs to exactly one Local.
+
+### User Prompt
+
+Configure Django to use Member as AUTH_USER_MODEL.
+
+Make sure authentication and password hashing work correctly.

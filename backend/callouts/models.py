@@ -20,6 +20,11 @@ class MemberManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
 
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True')
+
         return self.create_user(email, password, **extra_fields)
 
 
@@ -54,8 +59,13 @@ class Member(AbstractBaseUser, PermissionsMixin):
 
     objects = MemberManager()
 
+    EMAIL_FIELD = 'email'
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['full_name', 'local', 'classification']
+
+    def clean(self):
+        super().clean()
+        self.email = type(self).objects.normalize_email(self.email)
 
     def __str__(self):
         return self.email
