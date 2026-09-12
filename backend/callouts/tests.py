@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
+from callouts.ai import FakeAnnouncementDraftAI
 from callouts.models import Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
-from callouts.views import draft_from_note
 
 
 class ActiveLeaderPermissionTests(SimpleTestCase):
@@ -113,7 +113,7 @@ class ActiveLeaderPermissionTests(SimpleTestCase):
 
 class AnnouncementDraftTests(SimpleTestCase):
     def test_ai_draft_preview_is_limited_to_120_characters(self):
-        draft = draft_from_note('Please share this update. ' + ('Details ' * 40))
+        draft = FakeAnnouncementDraftAI().draft('Please share this update. ' + ('Details ' * 40))
 
         self.assertIn('title', draft)
         self.assertIn('body', draft)

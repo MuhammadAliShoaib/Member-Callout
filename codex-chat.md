@@ -281,6 +281,16 @@ Do not send or save an announcement.
 
 ### User Prompt
 
+Move AI generation behind an AI service class.
+
+Provide:
+- real provider interface
+- fake local implementation
+
+The project must work without evaluator AI credentials.
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.
