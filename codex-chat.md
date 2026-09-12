@@ -314,6 +314,16 @@ On confirmation:
 
 ### User Prompt
 
+If title, body, or push_preview changes after confirmation:
+
+- clear confirmed_content_hash
+- clear confirmed_at
+- change status back to draft
+
+Add tests.
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.

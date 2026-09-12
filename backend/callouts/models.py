@@ -94,6 +94,36 @@ class Announcement(models.Model):
     queued_at = models.DateTimeField(blank=True, null=True)
     sent_at = models.DateTimeField(blank=True, null=True)
 
+    def content_fields_changed(self, previous):
+        return any(
+            getattr(self, field) != getattr(previous, field)
+            for field in ('title', 'body', 'push_preview')
+        )
+
+    def reset_confirmation(self):
+        self.confirmed_content_hash = ''
+        self.confirmed_at = None
+        self.status = self.Status.DRAFT
+
+    def save(self, *args, **kwargs):
+        if self.pk and self.status != self.Status.DRAFT:
+            previous = type(self).objects.filter(pk=self.pk).only(
+                'title',
+                'body',
+                'push_preview',
+            ).first()
+            if previous and self.content_fields_changed(previous):
+                self.reset_confirmation()
+                update_fields = kwargs.get('update_fields')
+                if update_fields is not None:
+                    kwargs['update_fields'] = set(update_fields) | {
+                        'confirmed_content_hash',
+                        'confirmed_at',
+                        'status',
+                    }
+
+        return super().save(*args, **kwargs)
+
     def __str__(self):
         return self.title
 

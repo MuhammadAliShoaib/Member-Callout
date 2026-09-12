@@ -17,6 +17,11 @@ from callouts.serializers import AnnouncementSerializer
 from callouts.tenant import for_request_local
 
 
+def announcement_content_hash(announcement):
+    content = f'{announcement.title}{announcement.body}{announcement.push_preview}'
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def health(request):
@@ -122,8 +127,7 @@ def announcement_confirm(request, announcement_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    content = f'{announcement.title}{announcement.body}{announcement.push_preview}'
-    announcement.confirmed_content_hash = hashlib.sha256(content.encode()).hexdigest()
+    announcement.confirmed_content_hash = announcement_content_hash(announcement)
     announcement.confirmed_at = timezone.now()
     announcement.status = Announcement.Status.CONFIRMED
     announcement.save(update_fields=['confirmed_content_hash', 'confirmed_at', 'status'])

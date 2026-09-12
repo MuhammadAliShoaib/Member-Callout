@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
+from django.utils import timezone
 
 from callouts.ai import (
     AIInvalidResponseError,
@@ -9,7 +10,7 @@ from callouts.ai import (
     FakeAnnouncementDraftAI,
     validate_draft_response,
 )
-from callouts.models import Local, Member
+from callouts.models import Announcement, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 
 
@@ -138,3 +139,40 @@ class AnnouncementDraftTests(SimpleTestCase):
         self.assertEqual(AITimeoutError.status_code, 504)
         self.assertEqual(AIProviderError.status_code, 502)
         self.assertEqual(AIInvalidResponseError.status_code, 502)
+
+
+class AnnouncementConfirmationTests(SimpleTestCase):
+    def test_content_field_changes_are_detected_after_confirmation(self):
+        previous = self.announcement(title='Old title')
+        current = self.announcement(title='New title')
+
+        self.assertTrue(current.content_fields_changed(previous))
+
+    def test_non_content_field_changes_do_not_clear_confirmation(self):
+        previous = self.announcement()
+        current = self.announcement(needs_ack=True)
+
+        self.assertFalse(current.content_fields_changed(previous))
+
+    def test_reset_confirmation_clears_confirmation_and_returns_to_draft(self):
+        announcement = self.announcement(
+            status=Announcement.Status.CONFIRMED,
+            confirmed_content_hash='abc123',
+            confirmed_at=timezone.now(),
+        )
+
+        announcement.reset_confirmation()
+
+        self.assertEqual(announcement.confirmed_content_hash, '')
+        self.assertIsNone(announcement.confirmed_at)
+        self.assertEqual(announcement.status, Announcement.Status.DRAFT)
+
+    def announcement(self, **overrides):
+        defaults = {
+            'title': 'Meeting',
+            'body': 'Meeting tonight.',
+            'push_preview': 'Meeting tonight.',
+            'status': Announcement.Status.CONFIRMED,
+        }
+        defaults.update(overrides)
+        return Announcement(**defaults)
