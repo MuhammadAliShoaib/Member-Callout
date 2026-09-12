@@ -192,3 +192,51 @@ Also create:
 - matching AnnouncementStats
 
 The seed command must remain re-runnable without duplicates.
+
+### User Prompt
+
+Add simple API authentication using the Member model.
+
+Create a login endpoint accepting:
+- email
+- password
+
+Return what the frontend needs to authenticate subsequent requests.
+
+Keep it simple for this technical exercise.
+
+### User Prompt
+
+Create a DRF permission that allows only active leaders.
+
+A leader must also be restricted to their own local.
+
+### User Prompt
+
+Create reusable helpers for tenant-scoped queries.
+
+Never trust local_id from request data.
+
+Always derive local_id from:
+request.user.local_id
+
+### User Prompt
+
+Add tests proving a Local 27 user cannot access Local 99 data and vice versa.
+
+Test both leaders and members.
+
+### User Prompt
+
+Add tests proving normal members cannot perform leader operations.
+
+Do not implement sending yet.
+
+### User Prompt
+
+Create reusable helpers for tenant-scoped queries.
+
+Never trust local_id from request data.
+
+Always derive local_id from:
+request.user.local_id
