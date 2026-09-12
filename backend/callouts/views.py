@@ -1,5 +1,8 @@
+import hashlib
+
 from django.contrib.auth import authenticate
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view
@@ -102,4 +105,27 @@ def announcement_detail(request, announcement_id):
         for_request_local(Announcement.objects.all(), request),
         id=announcement_id,
     )
+    return Response(AnnouncementSerializer(announcement).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcement_confirm(request, announcement_id):
+    announcement = get_object_or_404(
+        for_request_local(Announcement.objects.all(), request),
+        id=announcement_id,
+    )
+
+    if announcement.status != Announcement.Status.DRAFT:
+        return Response(
+            {'detail': 'Only draft announcements can be confirmed.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    content = f'{announcement.title}{announcement.body}{announcement.push_preview}'
+    announcement.confirmed_content_hash = hashlib.sha256(content.encode()).hexdigest()
+    announcement.confirmed_at = timezone.now()
+    announcement.status = Announcement.Status.CONFIRMED
+    announcement.save(update_fields=['confirmed_content_hash', 'confirmed_at', 'status'])
+
     return Response(AnnouncementSerializer(announcement).data)

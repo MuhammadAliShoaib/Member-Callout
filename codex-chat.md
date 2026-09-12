@@ -302,6 +302,18 @@ AI failure must never trigger announcement sending.
 
 ### User Prompt
 
+Create an announcement confirmation endpoint.
+
+Only leaders can confirm.
+
+On confirmation:
+- hash title + body + push_preview using SHA-256
+- save confirmed_content_hash
+- set confirmed_at
+- change draft -> confirmed
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.
