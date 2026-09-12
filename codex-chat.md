@@ -34,3 +34,12 @@ Also read SECRET_KEY and DEBUG from environment variables.
 ### User Prompt
 
 add env file along with env example and use all those variables for settings
+
+### User Prompt
+
+Add GET /api/health/.
+
+Return:
+{"status": "ok"}
+
+Keep it minimal.
