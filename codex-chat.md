@@ -43,3 +43,33 @@ Return:
 {"status": "ok"}
 
 Keep it minimal.
+
+### User Prompt
+
+Create a Local model in the callouts app.
+
+Fields:
+- id: UUID primary key
+- name: string
+
+Add created_at.
+
+### User Prompt
+
+Create the Member model.
+
+Member is the authentication user model.
+
+Fields:
+- id: UUID
+- local: FK to Local
+- full_name
+- email: unique
+- classification
+- status: active | retired | suspended
+- role: member | leader
+- is_active
+
+Use email for authentication.
+
+A Member belongs to exactly one Local.
