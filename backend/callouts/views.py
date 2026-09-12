@@ -1,3 +1,5 @@
+import re
+
 from django.contrib.auth import authenticate
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -11,6 +13,24 @@ from callouts.models import Announcement
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
 from callouts.tenant import for_request_local
+
+
+def truncate_text(value, max_length):
+    if len(value) <= max_length:
+        return value
+
+    return value[: max_length - 3].rstrip() + '...'
+
+
+def draft_from_note(note):
+    normalized = re.sub(r'\s+', ' ', note).strip()
+    first_sentence = re.split(r'[.!?]', normalized, maxsplit=1)[0].strip()
+
+    return {
+        'title': truncate_text(first_sentence or 'Announcement', 80),
+        'body': normalized,
+        'push_preview': truncate_text(normalized, 120),
+    }
 
 
 @api_view(['GET'])
@@ -70,6 +90,20 @@ def announcements(request):
         AnnouncementSerializer(announcement).data,
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(['POST'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcement_ai_draft(request):
+    note = request.data.get('note')
+
+    if not note:
+        return Response(
+            {'detail': 'Note is required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return Response(draft_from_note(note))
 
 
 @api_view(['GET'])

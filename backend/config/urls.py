@@ -16,12 +16,13 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from callouts.views import announcement_detail, announcements, health, login
+from callouts.views import announcement_ai_draft, announcement_detail, announcements, health, login
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/health/', health, name='health'),
     path('api/login/', login, name='login'),
     path('api/announcements/', announcements, name='announcements'),
+    path('api/announcements/ai-draft/', announcement_ai_draft, name='announcement-ai-draft'),
     path('api/announcements/<uuid:announcement_id>/', announcement_detail, name='announcement-detail'),
 ]

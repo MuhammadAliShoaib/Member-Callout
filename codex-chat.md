@@ -263,6 +263,24 @@ Only return the announcement if it belongs to the leader's local.
 
 ### User Prompt
 
+Create:
+
+POST /api/announcements/ai-draft/
+
+Input:
+{"note": "messy announcement text"}
+
+Return:
+- title
+- body
+- push_preview
+
+push_preview must be <= 120 characters.
+
+Do not send or save an announcement.
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.

@@ -4,6 +4,7 @@ from django.test import SimpleTestCase
 
 from callouts.models import Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
+from callouts.views import draft_from_note
 
 
 class ActiveLeaderPermissionTests(SimpleTestCase):
@@ -108,3 +109,13 @@ class ActiveLeaderPermissionTests(SimpleTestCase):
 
     def local_data(self, local):
         return SimpleNamespace(local_id=local.id)
+
+
+class AnnouncementDraftTests(SimpleTestCase):
+    def test_ai_draft_preview_is_limited_to_120_characters(self):
+        draft = draft_from_note('Please share this update. ' + ('Details ' * 40))
+
+        self.assertIn('title', draft)
+        self.assertIn('body', draft)
+        self.assertIn('push_preview', draft)
+        self.assertLessEqual(len(draft['push_preview']), 120)
