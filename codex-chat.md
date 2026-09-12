@@ -79,3 +79,26 @@ A Member belongs to exactly one Local.
 Configure Django to use Member as AUTH_USER_MODEL.
 
 Make sure authentication and password hashing work correctly.
+
+### User Prompt
+
+Create the Announcement model.
+
+Fields:
+- id: UUID
+- local
+- created_by
+- title
+- body
+- push_preview
+- target_classification: nullable
+- needs_ack
+- status
+- confirmed_content_hash
+- created_at
+- confirmed_at
+- queued_at
+- sent_at
+
+Status:
+draft | confirmed | queued | sent

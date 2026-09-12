@@ -69,3 +69,29 @@ class Member(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+
+class Announcement(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        CONFIRMED = 'confirmed', 'Confirmed'
+        QUEUED = 'queued', 'Queued'
+        SENT = 'sent', 'Sent'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    local = models.ForeignKey(Local, on_delete=models.PROTECT, related_name='announcements')
+    created_by = models.ForeignKey(Member, on_delete=models.PROTECT, related_name='announcements')
+    title = models.CharField(max_length=255)
+    body = models.TextField()
+    push_preview = models.CharField(max_length=255)
+    target_classification = models.CharField(max_length=255, blank=True, null=True)
+    needs_ack = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    confirmed_content_hash = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(blank=True, null=True)
+    queued_at = models.DateTimeField(blank=True, null=True)
+    sent_at = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return self.title
