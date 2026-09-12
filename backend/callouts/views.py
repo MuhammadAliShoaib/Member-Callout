@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view
@@ -9,6 +10,7 @@ from rest_framework.response import Response
 from callouts.models import Announcement
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
+from callouts.tenant import for_request_local
 
 
 @api_view(['GET'])
@@ -68,3 +70,13 @@ def announcements(request):
         AnnouncementSerializer(announcement).data,
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(['GET'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcement_detail(request, announcement_id):
+    announcement = get_object_or_404(
+        for_request_local(Announcement.objects.all(), request),
+        id=announcement_id,
+    )
+    return Response(AnnouncementSerializer(announcement).data)

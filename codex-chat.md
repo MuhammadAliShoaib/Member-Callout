@@ -234,6 +234,35 @@ Do not implement sending yet.
 
 ### User Prompt
 
+Create:
+
+POST /api/announcements/
+
+Leader only.
+
+Accept:
+- title
+- body
+- push_preview
+- target_classification
+- needs_ack
+
+Set local from request.user.local.
+Set created_by from request.user.
+Start status as draft.
+
+### User Prompt
+
+Create:
+
+GET /api/announcements/{id}/
+
+Leader only.
+
+Only return the announcement if it belongs to the leader's local.
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.
