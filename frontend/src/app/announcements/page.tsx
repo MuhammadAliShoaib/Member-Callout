@@ -5,13 +5,12 @@ import { useRouter } from 'next/navigation';
 import {
   apiListAnnouncements,
   apiCreateAnnouncement,
-  apiAIDraft,
+  apiAIRegenerate,
   apiConfirmAnnouncement,
   apiGetAnnouncementStats,
   apiSendAnnouncement,
   apiGetAnnouncement,
   type Announcement,
-  type AIDraft,
   type AnnouncementStats,
 } from '@/lib/api';
 import { getToken, getMember, clearAuth } from '@/lib/auth';
@@ -31,7 +30,7 @@ function announcementDate(a: Announcement): string {
 
 export default function AnnouncementsPage() {
   const router = useRouter();
-  const [member, setMember] = useState<ReturnType<typeof getMember>>(null);
+  const [member] = useState<ReturnType<typeof getMember>>(() => getMember());
 
   const [list, setList] = useState<Announcement[]>([]);
   const [listError, setListError] = useState('');
@@ -52,9 +51,8 @@ export default function AnnouncementsPage() {
   const [aiNote, setAiNote] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
-  const [aiPending, setAiPending] = useState<AIDraft | null>(null);
+  const [aiSuggestion, setAiSuggestion] = useState('');
   const aiGeneration = useRef(0);
-  const editVersion = useRef(0);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -75,7 +73,6 @@ export default function AnnouncementsPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) { router.replace('/login'); return; }
-    setMember(getMember());
     loadList(token);
   }, [router, loadList]);
 
@@ -155,20 +152,13 @@ export default function AnnouncementsPage() {
     const token = getToken();
     if (!token || !aiNote.trim()) return;
     setAiError('');
-    setAiPending(null);
+    setAiSuggestion('');
     setAiLoading(true);
     const id = ++aiGeneration.current;
-    const versionAtStart = editVersion.current;
     try {
-      const draft = await apiAIDraft(token, aiNote.trim());
+      const result = await apiAIRegenerate(token, aiNote.trim());
       if (id !== aiGeneration.current) return;
-      if (editVersion.current !== versionAtStart) {
-        setAiPending(draft);
-      } else {
-        setTitle(draft.title);
-        setBody(draft.body);
-        setPushPreview(draft.push_preview);
-      }
+      setAiSuggestion(result.generated_text);
     } catch (err) {
       if (id !== aiGeneration.current) return;
       setAiError(err instanceof Error ? err.message : 'AI draft failed.');
@@ -177,12 +167,10 @@ export default function AnnouncementsPage() {
     }
   }
 
-  function applyAiPending() {
-    if (!aiPending) return;
-    setTitle(aiPending.title);
-    setBody(aiPending.body);
-    setPushPreview(aiPending.push_preview);
-    setAiPending(null);
+  function applyAiSuggestion() {
+    if (!aiSuggestion) return;
+    setBody(aiSuggestion);
+    setAiSuggestion('');
   }
 
   async function handleConfirm() {
@@ -399,12 +387,13 @@ export default function AnnouncementsPage() {
               />
             </div>
             {aiError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 8 }}>{aiError}</p>}
-            {aiPending && (
+            {aiSuggestion && (
               <div style={{ marginBottom: 8, padding: '10px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: '0.875rem' }}>
-                <p style={{ marginBottom: 8 }}>AI result is ready, but you edited the form. Apply it now or discard.</p>
+                <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
+                <p style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{aiSuggestion}</p>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="btn btn-primary btn-sm" onClick={applyAiPending}>Apply</button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiPending(null)}>Discard</button>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>Apply to body</button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiSuggestion('')}>Discard</button>
                 </div>
               </div>
             )}
@@ -426,7 +415,7 @@ export default function AnnouncementsPage() {
                 type="text"
                 className="form-input"
                 value={title}
-                onChange={e => { editVersion.current++; setTitle(e.target.value); }}
+                onChange={e => setTitle(e.target.value)}
                 required
                 maxLength={255}
               />
@@ -438,7 +427,7 @@ export default function AnnouncementsPage() {
                 id="body"
                 className="form-textarea"
                 value={body}
-                onChange={e => { editVersion.current++; setBody(e.target.value); }}
+                onChange={e => setBody(e.target.value)}
                 required
                 rows={6}
               />
@@ -451,7 +440,7 @@ export default function AnnouncementsPage() {
                 type="text"
                 className="form-input"
                 value={pushPreview}
-                onChange={e => { editVersion.current++; setPushPreview(e.target.value); }}
+                onChange={e => setPushPreview(e.target.value)}
                 required
                 maxLength={255}
               />

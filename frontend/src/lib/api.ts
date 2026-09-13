@@ -47,6 +47,10 @@ export interface AIDraft {
   push_preview: string;
 }
 
+export interface AIRegeneration {
+  generated_text: string;
+}
+
 export interface AnnouncementStats {
   target_count: number;
   sent_count: number;
@@ -90,6 +94,20 @@ export function apiAIDraft(token: string, note: string) {
   return request<AIDraft>(
     '/api/announcements/ai-draft/',
     { method: 'POST', body: JSON.stringify({ note }) },
+    token,
+  );
+}
+
+export function apiAIRegenerate(token: string, text: string, instruction?: string) {
+  return request<AIRegeneration>(
+    '/api/announcements/ai/regenerate/',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        instruction: instruction?.trim() || undefined,
+      }),
+    },
     token,
   );
 }

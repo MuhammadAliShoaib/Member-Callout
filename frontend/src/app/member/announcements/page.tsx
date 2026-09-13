@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { apiGetMemberAnnouncements, type MemberAnnouncement } from '@/lib/api';
 import { getToken, getMember, clearAuth } from '@/lib/auth';
 
 export default function MemberAnnouncementsPage() {
   const router = useRouter();
-  const [member, setMember] = useState<ReturnType<typeof getMember>>(null);
+  const [member] = useState<ReturnType<typeof getMember>>(() => getMember());
   const [announcements, setAnnouncements] = useState<MemberAnnouncement[]>([]);
   const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -27,7 +28,6 @@ export default function MemberAnnouncementsPage() {
     if (!token) { router.replace('/login'); return; }
     const m = getMember();
     if (m?.role === 'leader') { router.replace('/announcements'); return; }
-    setMember(m);
     load(token);
   }, [router, load]);
 
@@ -63,7 +63,7 @@ export default function MemberAnnouncementsPage() {
         {announcements.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {announcements.map(a => (
-              <a key={a.id} href={`/member/announcements/${a.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              <Link key={a.id} href={`/member/announcements/${a.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
               <div className="card" style={{ padding: '16px 20px' }}>
                 <p style={{ fontWeight: 600, marginBottom: 4 }}>{a.title}</p>
                 <p style={{ fontSize: '0.875rem', color: 'var(--muted)', marginBottom: 8 }}>
@@ -76,7 +76,7 @@ export default function MemberAnnouncementsPage() {
                   {a.is_acknowledged && <span>Acknowledged</span>}
                 </div>
               </div>
-              </a>
+              </Link>
             ))}
           </div>
         )}

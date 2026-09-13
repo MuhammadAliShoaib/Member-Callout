@@ -2,9 +2,11 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import Link from 'next/link';
 import {
   apiGetAnnouncement,
   apiUpdateAnnouncement,
+  apiAIRegenerate,
   apiConfirmAnnouncement,
   apiSendAnnouncement,
   apiPollAnnouncementStats,
@@ -24,7 +26,7 @@ export default function AnnouncementDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
 
-  const [member, setMember] = useState<ReturnType<typeof getMember>>(null);
+  const [member] = useState<ReturnType<typeof getMember>>(() => getMember());
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const [loadError, setLoadError] = useState('');
 
@@ -41,14 +43,25 @@ export default function AnnouncementDetailPage() {
   const [actionError, setActionError] = useState('');
   const [stats, setStats] = useState<AnnouncementStats | null>(null);
   const statsEtag = useRef<string | null>(null);
+  const statusRef = useRef<Announcement['status'] | null>(null);
+
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiSuggestion, setAiSuggestion] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const aiGeneration = useRef(0);
 
   function populate(a: Announcement) {
     setAnnouncement(a);
+    statusRef.current = a.status;
     setTitle(a.title);
     setBody(a.body);
     setPushPreview(a.push_preview);
     setClassification(a.target_classification ?? '');
     setNeedsAck(a.needs_ack);
+    if (a.status !== 'draft') {
+      setAiSuggestion('');
+    }
   }
 
   const load = useCallback(async (token: string) => {
@@ -69,7 +82,6 @@ export default function AnnouncementDetailPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) { router.replace('/login'); return; }
-    setMember(getMember());
     load(token);
   }, [router, load]);
 
@@ -135,6 +147,40 @@ export default function AnnouncementDetailPage() {
     }
   }
 
+  async function handleAIRegenerate() {
+    const token = getToken();
+    if (!token || !body.trim() || announcement?.status !== 'draft') return;
+    setAiError('');
+    setAiSuggestion('');
+    setAiLoading(true);
+    const requestId = ++aiGeneration.current;
+    try {
+      const result = await apiAIRegenerate(token, body.trim(), aiInstruction.trim() || undefined);
+      if (requestId !== aiGeneration.current) return;
+      if (statusRef.current !== 'draft') {
+        setAiError('AI suggestion discarded because this announcement is no longer a draft.');
+        return;
+      }
+      setAiSuggestion(result.generated_text);
+    } catch (err) {
+      if (requestId !== aiGeneration.current) return;
+      setAiError(err instanceof Error ? err.message : 'AI regeneration failed.');
+    } finally {
+      if (requestId === aiGeneration.current) setAiLoading(false);
+    }
+  }
+
+  function applyAiSuggestion() {
+    if (!aiSuggestion) return;
+    if (statusRef.current !== 'draft') {
+      setAiSuggestion('');
+      setAiError('AI suggestion discarded because this announcement is no longer a draft.');
+      return;
+    }
+    setBody(aiSuggestion);
+    setAiSuggestion('');
+  }
+
   async function handleConfirm() {
     const token = getToken();
     if (!token) return;
@@ -169,7 +215,7 @@ export default function AnnouncementDetailPage() {
     <>
       <header className="header">
         <div className="container header-inner">
-          <a href="/announcements" className="header-title">Member Callout</a>
+          <Link href="/announcements" className="header-title">Member Callout</Link>
           {member && (
             <div className="header-user">
               <span>{member.full_name}</span>
@@ -222,6 +268,45 @@ export default function AnnouncementDetailPage() {
                 rows={6}
               />
             </div>
+
+            {announcement.status === 'draft' && (
+              <div className="form-group" style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg)' }}>
+                <label className="form-label" htmlFor="ai-instruction">Regenerate body with AI</label>
+                <input
+                  id="ai-instruction"
+                  type="text"
+                  className="form-input"
+                  value={aiInstruction}
+                  onChange={e => setAiInstruction(e.target.value)}
+                  maxLength={500}
+                  placeholder="Optional instruction, e.g. Make it shorter"
+                />
+                {aiError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 8 }}>{aiError}</p>}
+                {aiSuggestion && (
+                  <div style={{ marginTop: 10, padding: 10, border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface)' }}>
+                    <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
+                    <p style={{ whiteSpace: 'pre-wrap', marginBottom: 10 }}>{aiSuggestion}</p>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>
+                        Apply to body
+                      </button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiSuggestion('')}>
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleAIRegenerate}
+                  disabled={aiLoading || !body.trim()}
+                  style={{ marginTop: 10 }}
+                >
+                  {aiLoading ? 'Regenerating…' : 'Regenerate suggestion'}
+                </button>
+              </div>
+            )}
 
             <div className="form-group">
               <label className="form-label" htmlFor="push-preview">Push preview</label>

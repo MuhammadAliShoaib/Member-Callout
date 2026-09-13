@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiCreateAnnouncement, apiAIDraft } from '@/lib/api';
+import { apiCreateAnnouncement, apiAIRegenerate } from '@/lib/api';
 import { getToken, getMember, clearAuth } from '@/lib/auth';
 
 export default function NewAnnouncementPage() {
   const router = useRouter();
-  const [member, setMember] = useState<ReturnType<typeof getMember>>(null);
+  const [member] = useState<ReturnType<typeof getMember>>(() => getMember());
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -19,6 +19,8 @@ export default function NewAnnouncementPage() {
   const [showAi, setShowAi] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [aiSuggestion, setAiSuggestion] = useState('');
+  const aiGeneration = useRef(0);
 
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -29,7 +31,6 @@ export default function NewAnnouncementPage() {
       router.replace('/login');
       return;
     }
-    setMember(getMember());
   }, [router]);
 
   function handleLogout() {
@@ -42,19 +43,27 @@ export default function NewAnnouncementPage() {
     const token = getToken();
     if (!token) return;
     setAiError('');
+    setAiSuggestion('');
     setAiLoading(true);
+    const requestId = ++aiGeneration.current;
     try {
-      const draft = await apiAIDraft(token, aiNote.trim());
-      setTitle(draft.title);
-      setBody(draft.body);
-      setPushPreview(draft.push_preview);
-      setShowAi(false);
-      setAiNote('');
+      const result = await apiAIRegenerate(token, aiNote.trim());
+      if (requestId !== aiGeneration.current) return;
+      setAiSuggestion(result.generated_text);
     } catch (err) {
+      if (requestId !== aiGeneration.current) return;
       setAiError(err instanceof Error ? err.message : 'AI draft failed.');
     } finally {
-      setAiLoading(false);
+      if (requestId === aiGeneration.current) setAiLoading(false);
     }
+  }
+
+  function applyAiSuggestion() {
+    if (!aiSuggestion) return;
+    setBody(aiSuggestion);
+    setAiSuggestion('');
+    setShowAi(false);
+    setAiNote('');
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -115,6 +124,20 @@ export default function NewAnnouncementPage() {
               />
             </div>
             {aiError && <p className="error-msg">{aiError}</p>}
+            {aiSuggestion && (
+              <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 12, background: 'var(--surface)' }}>
+                <p className="form-label">AI suggestion</p>
+                <p style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>{aiSuggestion}</p>
+                <div className="ai-actions">
+                  <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>
+                    Apply to body
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiSuggestion('')}>
+                    Discard
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="ai-actions">
               <button
                 type="button"

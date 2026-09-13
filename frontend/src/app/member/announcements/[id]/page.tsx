@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import Link from 'next/link';
 import {
   apiGetMemberAnnouncement,
   apiAcknowledgeMemberAnnouncement,
@@ -13,7 +14,7 @@ export default function MemberAnnouncementDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
 
-  const [member, setMember] = useState<ReturnType<typeof getMember>>(null);
+  const [member] = useState<ReturnType<typeof getMember>>(() => getMember());
   const [announcement, setAnnouncement] = useState<MemberAnnouncementDetail | null>(null);
   const [loadError, setLoadError] = useState('');
   const [ackLoading, setAckLoading] = useState(false);
@@ -32,7 +33,6 @@ export default function MemberAnnouncementDetailPage() {
     if (!token) { router.replace('/login'); return; }
     const m = getMember();
     if (m?.role === 'leader') { router.replace('/announcements'); return; }
-    setMember(m);
     load(token);
   }, [router, load]);
 
@@ -55,7 +55,7 @@ export default function MemberAnnouncementDetailPage() {
     <>
       <header className="header">
         <div className="container header-inner">
-          <a href="/member/announcements" className="header-title">Member Callout</a>
+          <Link href="/member/announcements" className="header-title">Member Callout</Link>
           {member && (
             <div className="header-user">
               <span>{member.full_name}</span>
