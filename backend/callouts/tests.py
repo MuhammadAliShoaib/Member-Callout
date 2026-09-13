@@ -1,7 +1,9 @@
 from datetime import timedelta
+from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import call, patch
 
+from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
@@ -481,6 +483,106 @@ class AnnouncementAudienceExpansionDatabaseTests(TestCase):
             status=Announcement.Status.CONFIRMED,
             confirmed_content_hash='confirmed',
         )
+
+
+class DeliverAnnouncementsCommandTests(TestCase):
+    def test_command_requeues_unclaimed_and_stale_pending_recipients_only(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        unclaimed = self.recipient(announcement, self.member(local, 'unclaimed@example.com'))
+        actively_claimed = self.recipient(
+            announcement,
+            self.member(local, 'active-claim@example.com'),
+            claimed_at=timezone.now(),
+            claimed_by='worker-1',
+        )
+        stale_claimed = self.recipient(
+            announcement,
+            self.member(local, 'stale-claim@example.com'),
+            claimed_at=timezone.now() - timedelta(seconds=301),
+            claimed_by='worker-2',
+        )
+        sent = self.recipient(
+            announcement,
+            self.member(local, 'sent@example.com'),
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        )
+        out = StringIO()
+
+        with self.settings(RECIPIENT_CLAIM_TIMEOUT_SECONDS=300, RECIPIENT_DELIVERY_BATCH_SIZE=2):
+            with patch(
+                'callouts.management.commands.deliver_announcements.deliver_recipient_batch.apply_async'
+            ) as apply_async:
+                call_command('deliver_announcements', stdout=out)
+
+        apply_async.assert_called_once_with(args=[[str(unclaimed.id), str(stale_claimed.id)]])
+        self.assertIn('Enqueued 2 pending announcement recipients for delivery.', out.getvalue())
+
+        for recipient in (unclaimed, actively_claimed, stale_claimed, sent):
+            recipient.refresh_from_db()
+
+        self.assertEqual(unclaimed.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(actively_claimed.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(stale_claimed.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(sent.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertIsNone(unclaimed.sent_at)
+        self.assertIsNone(stale_claimed.sent_at)
+
+    def test_command_enqueues_recipient_ids_in_configurable_batches(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        recipients = [
+            self.recipient(announcement, self.member(local, f'member-{number}@example.com'))
+            for number in range(5)
+        ]
+
+        with self.settings(RECIPIENT_DELIVERY_BATCH_SIZE=2):
+            with patch(
+                'callouts.management.commands.deliver_announcements.deliver_recipient_batch.apply_async'
+            ) as apply_async:
+                call_command('deliver_announcements', stdout=StringIO())
+
+        apply_async.assert_has_calls([
+            call(args=[[str(recipients[0].id), str(recipients[1].id)]]),
+            call(args=[[str(recipients[2].id), str(recipients[3].id)]]),
+            call(args=[[str(recipients[4].id)]]),
+        ])
+        self.assertEqual(apply_async.call_count, 3)
+
+    def member(self, local, email, role=Member.Role.MEMBER):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def announcement(self, local, created_by):
+        return Announcement.objects.create(
+            local=local,
+            created_by=created_by,
+            title='Meeting',
+            body='Meeting tonight.',
+            push_preview='Meeting tonight.',
+            status=Announcement.Status.QUEUED,
+            confirmed_content_hash='confirmed',
+        )
+
+    def recipient(self, announcement, member, **overrides):
+        defaults = {
+            'local': announcement.local,
+            'announcement': announcement,
+            'member': member,
+            'classification_snapshot': member.classification,
+        }
+        defaults.update(overrides)
+        return AnnouncementRecipient.objects.create(**defaults)
 
 
 class DeliveryTaskTests(SimpleTestCase):

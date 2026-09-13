@@ -597,3 +597,19 @@ Requirements:
 - do not perform delivery inside the HTTP request
 
 Make batch size configurable.
+
+### User Prompt
+
+Refactor:
+
+python manage.py deliver_announcements
+
+It must no longer deliver notifications directly.
+
+Instead:
+- find pending recipients needing delivery
+- ignore actively claimed recipients
+- include stale claims eligible for recovery
+- enqueue IDs to Celery in batches of 250
+
+Keep this command as a manual recovery/requeue mechanism.
