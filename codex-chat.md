@@ -657,3 +657,25 @@ When no pending recipients remain:
 - set sent_at
 
 Make concurrent completion safe.
+
+### User Prompt
+
+Add tests where the same recipient IDs are submitted to multiple Celery tasks concurrently.
+
+Verify:
+- only one worker can claim each recipient
+- sent recipients are not processed again
+- database state remains correct
+- stats are not double-counted
+
+Add tests for delivery retries.
+
+Test:
+1. temporary failure
+2. successful retry
+3. multiple temporary failures
+4. retries exhausted
+5. already-sent recipient
+6. stale claim recovery
+
+Verify final delivery_status and attempt_count.

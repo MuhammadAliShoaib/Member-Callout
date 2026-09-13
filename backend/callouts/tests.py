@@ -729,6 +729,212 @@ class DeliveryStatsDatabaseTests(TestCase):
         return AnnouncementRecipient.objects.create(**defaults)
 
 
+class DeliveryTaskDatabaseTests(TestCase):
+    def test_duplicate_tasks_do_not_process_sent_recipients_or_double_count_stats(self):
+        local, announcement, stats = self.delivery_setup(target_count=2)
+        first = self.recipient(announcement, self.member(local, 'first@example.com'))
+        second = self.recipient(announcement, self.member(local, 'second@example.com'))
+        recipient_ids = [str(first.id), str(second.id)]
+
+        with patch('callouts.tasks.fake_push_delivery') as fake_push_delivery:
+            first_result = deliver_recipient_batch.run(recipient_ids)
+            second_result = deliver_recipient_batch.run(recipient_ids)
+
+        self.assertEqual(fake_push_delivery.call_count, 2)
+        self.assertEqual(first_result['processed'], 2)
+        self.assertEqual(second_result['processed'], 0)
+        self.assertEqual(second_result['completed_announcements'], 0)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(first.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertEqual(second.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertEqual(first.attempt_count, 0)
+        self.assertEqual(second.attempt_count, 0)
+        self.assertEqual(stats.sent_count, 2)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
+
+    def test_temporary_failure_leaves_pending_and_increments_attempt_count(self):
+        local, announcement, stats = self.delivery_setup(target_count=1)
+        recipient = self.recipient(announcement, self.member(local, 'member@example.com'))
+
+        with patch('callouts.tasks.fake_push_delivery', side_effect=TemporaryDeliveryError('try again')):
+            with patch.object(deliver_recipient_batch, 'apply_async') as apply_async:
+                result = deliver_recipient_batch.run([str(recipient.id)])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(result['temporary_failures'], 1)
+        self.assertEqual(result['retryable'], 1)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(recipient.attempt_count, 1)
+        self.assertIsNone(recipient.claimed_at)
+        self.assertEqual(stats.sent_count, 0)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.QUEUED)
+        apply_async.assert_called_once_with(args=[[str(recipient.id)]], countdown=1)
+
+    def test_successful_retry_marks_sent_after_temporary_failure(self):
+        local, announcement, stats = self.delivery_setup(target_count=1)
+        recipient = self.recipient(announcement, self.member(local, 'member@example.com'))
+
+        with patch('callouts.tasks.fake_push_delivery', side_effect=TemporaryDeliveryError('try again')):
+            with patch.object(deliver_recipient_batch, 'apply_async'):
+                deliver_recipient_batch.run([str(recipient.id)])
+
+        with patch('callouts.tasks.fake_push_delivery'):
+            result = deliver_recipient_batch.run([str(recipient.id)])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertEqual(recipient.attempt_count, 1)
+        self.assertEqual(stats.sent_count, 1)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
+        self.assertIsNotNone(announcement.sent_at)
+
+    def test_multiple_temporary_failures_keep_retrying_until_limit(self):
+        local, announcement, stats = self.delivery_setup(target_count=1)
+        recipient = self.recipient(announcement, self.member(local, 'member@example.com'))
+
+        with self.settings(MAX_DELIVERY_ATTEMPTS=4):
+            with patch('callouts.tasks.fake_push_delivery', side_effect=TemporaryDeliveryError('try again')):
+                with patch.object(deliver_recipient_batch, 'apply_async') as apply_async:
+                    first_result = deliver_recipient_batch.run([str(recipient.id)])
+                    second_result = deliver_recipient_batch.run([str(recipient.id)])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        self.assertEqual(first_result['retryable'], 1)
+        self.assertEqual(second_result['retryable'], 1)
+        self.assertEqual(apply_async.call_count, 2)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(recipient.attempt_count, 2)
+        self.assertEqual(stats.failed_count, 0)
+
+    def test_retries_exhausted_marks_failed_and_counts_failure(self):
+        local, announcement, stats = self.delivery_setup(target_count=1)
+        recipient = self.recipient(
+            announcement,
+            self.member(local, 'member@example.com'),
+            attempt_count=2,
+        )
+
+        with self.settings(MAX_DELIVERY_ATTEMPTS=3):
+            with patch('callouts.tasks.fake_push_delivery', side_effect=TemporaryDeliveryError('try again')):
+                with patch.object(deliver_recipient_batch, 'apply_async') as apply_async:
+                    result = deliver_recipient_batch.run([str(recipient.id)])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(result['temporary_failures'], 1)
+        self.assertEqual(result['retryable'], 0)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.FAILED)
+        self.assertEqual(recipient.attempt_count, 3)
+        self.assertEqual(stats.sent_count, 0)
+        self.assertEqual(stats.failed_count, 1)
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
+        apply_async.assert_not_called()
+
+    def test_already_sent_recipient_is_not_processed_again(self):
+        local, announcement, stats = self.delivery_setup(target_count=1, sent_count=1)
+        recipient = self.recipient(
+            announcement,
+            self.member(local, 'member@example.com'),
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+            sent_at=timezone.now(),
+        )
+
+        with patch('callouts.tasks.fake_push_delivery') as fake_push_delivery:
+            result = deliver_recipient_batch.run([str(recipient.id)])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        self.assertEqual(result['processed'], 0)
+        self.assertEqual(result['temporary_failures'], 0)
+        fake_push_delivery.assert_not_called()
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertEqual(recipient.attempt_count, 0)
+        self.assertEqual(stats.sent_count, 1)
+        self.assertEqual(stats.failed_count, 0)
+
+    def test_stale_claim_recovery_processes_recipient(self):
+        local, announcement, stats = self.delivery_setup(target_count=1)
+        recipient = self.recipient(
+            announcement,
+            self.member(local, 'member@example.com'),
+            claimed_at=timezone.now() - timedelta(seconds=301),
+            claimed_by='old-worker',
+        )
+
+        with self.settings(RECIPIENT_CLAIM_TIMEOUT_SECONDS=300):
+            with patch('callouts.tasks.fake_push_delivery'):
+                result = deliver_recipient_batch.run([str(recipient.id)])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertEqual(recipient.attempt_count, 0)
+        self.assertIsNone(recipient.claimed_at)
+        self.assertIsNone(recipient.claimed_by)
+        self.assertEqual(stats.sent_count, 1)
+
+    def delivery_setup(self, target_count=0, sent_count=0, failed_count=0):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        stats = AnnouncementStats.objects.create(
+            announcement=announcement,
+            local=local,
+            target_count=target_count,
+            sent_count=sent_count,
+            failed_count=failed_count,
+        )
+        return local, announcement, stats
+
+    def member(self, local, email, role=Member.Role.MEMBER):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def announcement(self, local, created_by):
+        return Announcement.objects.create(
+            local=local,
+            created_by=created_by,
+            title='Meeting',
+            body='Meeting tonight.',
+            push_preview='Meeting tonight.',
+            status=Announcement.Status.QUEUED,
+            confirmed_content_hash='confirmed',
+        )
+
+    def recipient(self, announcement, member, **overrides):
+        defaults = {
+            'local': announcement.local,
+            'announcement': announcement,
+            'member': member,
+            'classification_snapshot': member.classification,
+        }
+        defaults.update(overrides)
+        return AnnouncementRecipient.objects.create(**defaults)
+
+
 class DeliveryTaskTests(SimpleTestCase):
     def test_recipient_batch_has_250_id_limit(self):
         recipient_ids = [str(number) for number in range(MAX_RECIPIENT_BATCH_SIZE + 1)]
