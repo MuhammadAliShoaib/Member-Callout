@@ -12,6 +12,7 @@ from callouts.ai import (
 )
 from callouts.models import Announcement, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
+from callouts.views import announcement_content_hash, announcement_content_is_confirmed
 
 
 class ActiveLeaderPermissionTests(SimpleTestCase):
@@ -142,6 +143,19 @@ class AnnouncementDraftTests(SimpleTestCase):
 
 
 class AnnouncementConfirmationTests(SimpleTestCase):
+    def test_confirmed_content_hash_matches_current_content(self):
+        announcement = self.announcement()
+        announcement.confirmed_content_hash = announcement_content_hash(announcement)
+
+        self.assertTrue(announcement_content_is_confirmed(announcement))
+
+    def test_changed_content_no_longer_matches_confirmed_hash(self):
+        announcement = self.announcement()
+        announcement.confirmed_content_hash = announcement_content_hash(announcement)
+        announcement.body = 'Changed meeting details.'
+
+        self.assertFalse(announcement_content_is_confirmed(announcement))
+
     def test_content_field_changes_are_detected_after_confirmation(self):
         previous = self.announcement(title='Old title')
         current = self.announcement(title='New title')

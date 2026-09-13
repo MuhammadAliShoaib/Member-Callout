@@ -324,6 +324,20 @@ Add tests.
 
 ### User Prompt
 
+Create:
+
+POST /api/announcements/{id}/send/
+
+Require:
+- active leader
+- same local
+- status = confirmed
+- confirmed content hash still matches
+
+Do not create recipients yet.
+
+### User Prompt
+
 Create reusable helpers for tenant-scoped queries.
 
 Never trust local_id from request data.

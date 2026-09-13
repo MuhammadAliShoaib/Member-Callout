@@ -22,6 +22,10 @@ def announcement_content_hash(announcement):
     return hashlib.sha256(content.encode()).hexdigest()
 
 
+def announcement_content_is_confirmed(announcement):
+    return announcement.confirmed_content_hash == announcement_content_hash(announcement)
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def health(request):
@@ -131,5 +135,32 @@ def announcement_confirm(request, announcement_id):
     announcement.confirmed_at = timezone.now()
     announcement.status = Announcement.Status.CONFIRMED
     announcement.save(update_fields=['confirmed_content_hash', 'confirmed_at', 'status'])
+
+    return Response(AnnouncementSerializer(announcement).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcement_send(request, announcement_id):
+    announcement = get_object_or_404(
+        for_request_local(Announcement.objects.all(), request),
+        id=announcement_id,
+    )
+
+    if announcement.status != Announcement.Status.CONFIRMED:
+        return Response(
+            {'detail': 'Only confirmed announcements can be sent.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not announcement_content_is_confirmed(announcement):
+        return Response(
+            {'detail': 'Announcement content has changed since confirmation.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    announcement.status = Announcement.Status.QUEUED
+    announcement.queued_at = timezone.now()
+    announcement.save(update_fields=['status', 'queued_at'])
 
     return Response(AnnouncementSerializer(announcement).data)
