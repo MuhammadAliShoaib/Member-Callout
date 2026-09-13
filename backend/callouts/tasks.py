@@ -32,6 +32,10 @@ def recipient_claim_stale_before(now):
     return now - timedelta(seconds=settings.RECIPIENT_CLAIM_TIMEOUT_SECONDS)
 
 
+def recipient_batch_size():
+    return settings.RECIPIENT_DELIVERY_BATCH_SIZE
+
+
 def retry_countdown(attempt_count):
     return min(2 ** max(attempt_count - 1, 0), MAX_RETRY_BACKOFF_SECONDS)
 
@@ -58,7 +62,7 @@ def claim_pending_recipients(recipient_ids, claimed_by):
         AnnouncementRecipient.objects.bulk_update(
             recipients,
             ['claimed_at', 'claimed_by'],
-            batch_size=MAX_RECIPIENT_BATCH_SIZE,
+            batch_size=recipient_batch_size(),
         )
 
     return [recipient.id for recipient in recipients]
@@ -122,8 +126,10 @@ def fake_push_delivery(recipient):
 
 @shared_task
 def deliver_recipient_batch(recipient_ids):
-    if len(recipient_ids) > MAX_RECIPIENT_BATCH_SIZE:
-        raise ValueError('deliver_recipient_batch accepts at most 250 recipient IDs.')
+    batch_size = recipient_batch_size()
+
+    if len(recipient_ids) > batch_size:
+        raise ValueError(f'deliver_recipient_batch accepts at most {batch_size} recipient IDs.')
 
     claimed_ids = claim_pending_recipients(recipient_ids, worker_id())
     recipients = list(

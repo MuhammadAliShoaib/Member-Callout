@@ -1,6 +1,6 @@
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
@@ -37,6 +37,8 @@ from callouts.views import (
     announcement_recipient_for_member,
     bulk_create_announcement_recipients,
     create_announcement_recipients_for_send,
+    enqueue_pending_recipients_for_delivery,
+    expand_and_enqueue_announcement_recipients,
     expand_announcement_audience,
     validate_announcement_audience_size,
 )
@@ -366,6 +368,48 @@ class AnnouncementAudienceTests(SimpleTestCase):
             batch_size=RECIPIENT_BULK_CREATE_BATCH_SIZE,
             ignore_conflicts=True,
         )
+
+    @patch('callouts.views.deliver_recipient_batch.apply_async')
+    @patch('callouts.views.pending_recipient_ids_for_delivery')
+    def test_enqueue_pending_recipients_uses_configurable_batches(
+        self,
+        pending_recipient_ids_for_delivery,
+        apply_async,
+    ):
+        pending_recipient_ids_for_delivery.return_value = (
+            f'recipient-{number}' for number in range(5)
+        )
+
+        with self.settings(RECIPIENT_DELIVERY_BATCH_SIZE=2):
+            enqueue_pending_recipients_for_delivery('announcement-id')
+
+        apply_async.assert_has_calls([
+            call(args=[['recipient-0', 'recipient-1']]),
+            call(args=[['recipient-2', 'recipient-3']]),
+            call(args=[['recipient-4']]),
+        ])
+        self.assertEqual(apply_async.call_count, 3)
+
+    @patch('callouts.views.deliver_recipient_batch.apply_async')
+    @patch('callouts.views.transaction.on_commit')
+    @patch('callouts.views.update_announcement_target_count')
+    @patch('callouts.views.expand_announcement_audience')
+    def test_expansion_registers_delivery_enqueue_after_commit(
+        self,
+        expand_announcement_audience,
+        update_announcement_target_count,
+        on_commit,
+        apply_async,
+    ):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+
+        expand_and_enqueue_announcement_recipients(announcement)
+
+        expand_announcement_audience.assert_called_once_with(announcement)
+        update_announcement_target_count.assert_called_once_with(announcement)
+        on_commit.assert_called_once()
+        apply_async.assert_not_called()
 
 
 class AnnouncementAudienceExpansionDatabaseTests(TestCase):

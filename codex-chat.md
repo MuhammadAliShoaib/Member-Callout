@@ -585,3 +585,15 @@ Requirements:
 - only members from the announcement's local may be inserted
 
 Add tests.
+
+### User Prompt
+
+After audience expansion, enqueue pending recipients to Celery.
+
+Requirements:
+- use batches of 250 recipient IDs
+- call deliver_recipient_batch for each batch
+- do not create one Celery task per recipient
+- do not perform delivery inside the HTTP request
+
+Make batch size configurable.

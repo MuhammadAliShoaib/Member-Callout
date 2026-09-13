@@ -15,6 +15,7 @@ from callouts.ai import AIError, get_announcement_draft_ai
 from callouts.models import Announcement, AnnouncementRecipient, AnnouncementStats, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
+from callouts.tasks import deliver_recipient_batch, recipient_batch_size
 from callouts.tenant import for_request_local
 
 MAX_ANNOUNCEMENT_RECIPIENTS = 22400
@@ -78,9 +79,14 @@ def create_announcement_recipients_for_send(announcement):
     if audience_size_error:
         return audience_size_error
 
+    expand_and_enqueue_announcement_recipients(announcement)
+    return None
+
+
+def expand_and_enqueue_announcement_recipients(announcement):
     expand_announcement_audience(announcement)
     update_announcement_target_count(announcement)
-    return None
+    transaction.on_commit(lambda: enqueue_pending_recipients_for_delivery(announcement.id))
 
 
 def update_announcement_target_count(announcement):
@@ -151,6 +157,36 @@ def bulk_create_announcement_recipients(recipients):
         batch_size=RECIPIENT_BULK_CREATE_BATCH_SIZE,
         ignore_conflicts=True,
     )
+
+
+def pending_recipient_ids_for_delivery(announcement_id):
+    return (
+        AnnouncementRecipient.objects.filter(
+            announcement_id=announcement_id,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+        )
+        .order_by('id')
+        .values_list('id', flat=True)
+        .iterator(chunk_size=recipient_batch_size())
+    )
+
+
+def enqueue_pending_recipients_for_delivery(announcement_id):
+    batch = []
+
+    for recipient_id in pending_recipient_ids_for_delivery(announcement_id):
+        batch.append(str(recipient_id))
+
+        if len(batch) == recipient_batch_size():
+            enqueue_recipient_delivery_batch(batch)
+            batch = []
+
+    if batch:
+        enqueue_recipient_delivery_batch(batch)
+
+
+def enqueue_recipient_delivery_batch(recipient_ids):
+    deliver_recipient_batch.apply_async(args=[recipient_ids])
 
 
 @api_view(['GET'])
@@ -307,7 +343,6 @@ def announcement_send(request, announcement_id):
         announcement.status = Announcement.Status.QUEUED
         announcement.queued_at = timezone.now()
         announcement.save(update_fields=['status', 'queued_at'])
-        expand_announcement_audience(announcement)
-        update_announcement_target_count(announcement)
+        expand_and_enqueue_announcement_recipients(announcement)
 
     return Response(AnnouncementSerializer(announcement).data)
