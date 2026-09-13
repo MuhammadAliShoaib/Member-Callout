@@ -344,3 +344,19 @@ Never trust local_id from request data.
 
 Always derive local_id from:
 request.user.local_id
+
+### User Prompt
+
+append all the prompts in the end of the file codex-chat.md rather than adding in between
+
+### User Prompt
+
+Make send atomically transition:
+
+confirmed -> queued
+
+Only one concurrent request may successfully claim the announcement.
+
+Retries must be idempotent.
+Use PostgreSQL for correctness.
+

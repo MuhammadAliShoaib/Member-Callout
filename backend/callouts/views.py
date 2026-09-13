@@ -1,6 +1,7 @@
 import hashlib
 
 from django.contrib.auth import authenticate
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -142,25 +143,35 @@ def announcement_confirm(request, announcement_id):
 @api_view(['POST'])
 @permission_classes([IsActiveLeaderInOwnLocal])
 def announcement_send(request, announcement_id):
-    announcement = get_object_or_404(
-        for_request_local(Announcement.objects.all(), request),
-        id=announcement_id,
-    )
-
-    if announcement.status != Announcement.Status.CONFIRMED:
-        return Response(
-            {'detail': 'Only confirmed announcements can be sent.'},
-            status=status.HTTP_400_BAD_REQUEST,
+    with transaction.atomic():
+        announcement = get_object_or_404(
+            for_request_local(Announcement.objects.select_for_update(), request),
+            id=announcement_id,
         )
 
-    if not announcement_content_is_confirmed(announcement):
-        return Response(
-            {'detail': 'Announcement content has changed since confirmation.'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        if announcement.status == Announcement.Status.QUEUED:
+            if not announcement_content_is_confirmed(announcement):
+                return Response(
+                    {'detail': 'Announcement content has changed since confirmation.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-    announcement.status = Announcement.Status.QUEUED
-    announcement.queued_at = timezone.now()
-    announcement.save(update_fields=['status', 'queued_at'])
+            return Response(AnnouncementSerializer(announcement).data)
+
+        if announcement.status != Announcement.Status.CONFIRMED:
+            return Response(
+                {'detail': 'Only confirmed announcements can be sent.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not announcement_content_is_confirmed(announcement):
+            return Response(
+                {'detail': 'Announcement content has changed since confirmation.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        announcement.status = Announcement.Status.QUEUED
+        announcement.queued_at = timezone.now()
+        announcement.save(update_fields=['status', 'queued_at'])
 
     return Response(AnnouncementSerializer(announcement).data)

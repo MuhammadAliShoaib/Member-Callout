@@ -19,6 +19,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'confirmed_content_hash',
             'created_at',
             'confirmed_at',
+            'queued_at',
         ]
         read_only_fields = [
             'id',
@@ -28,4 +29,5 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'confirmed_content_hash',
             'created_at',
             'confirmed_at',
+            'queued_at',
         ]
