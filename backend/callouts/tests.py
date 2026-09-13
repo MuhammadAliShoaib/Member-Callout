@@ -1,5 +1,6 @@
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 from django.utils import timezone
@@ -16,6 +17,7 @@ from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
     deliver_recipient_batch,
+    mark_recipients_sent,
     recipient_claim_stale_before,
 )
 from callouts.views import (
@@ -262,3 +264,18 @@ class DeliveryTaskTests(SimpleTestCase):
 
         with self.settings(RECIPIENT_CLAIM_TIMEOUT_SECONDS=60):
             self.assertEqual(recipient_claim_stale_before(now), now - timedelta(seconds=60))
+
+    @patch('callouts.tasks.AnnouncementRecipient.objects')
+    def test_successful_delivery_marks_sent_and_clears_claim(self, recipient_manager):
+        mark_recipients_sent(['recipient-id'])
+
+        recipient_manager.filter.assert_called_once_with(
+            id__in=['recipient-id'],
+            delivery_status='pending',
+        )
+        recipient_manager.filter.return_value.update.assert_called_once()
+        update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
+        self.assertEqual(update_kwargs['delivery_status'], 'sent')
+        self.assertIsNotNone(update_kwargs['sent_at'])
+        self.assertIsNone(update_kwargs['claimed_at'])
+        self.assertIsNone(update_kwargs['claimed_by'])

@@ -470,3 +470,17 @@ If a recipient:
 allow another worker to reclaim it.
 
 Make the claim timeout configurable.
+
+### User Prompt
+
+Implement successful delivery in deliver_recipient_batch.
+
+For now fake push delivery by logging.
+
+On success:
+- delivery_status = sent
+- sent_at = now
+- clear claimed_at
+- clear claimed_by
+
+Do not deliver already-sent recipients.

@@ -58,6 +58,8 @@ def mark_recipients_sent(recipient_ids):
     ).update(
         delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
         sent_at=sent_at,
+        claimed_at=None,
+        claimed_by=None,
         last_error=None,
     )
 
