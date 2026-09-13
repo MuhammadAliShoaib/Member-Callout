@@ -28,6 +28,7 @@ from callouts.tasks import (
     mark_recipients_sent,
     recipient_claim_stale_before,
     recipients_for_delivery,
+    reconcile_announcement_stats,
     retry_countdown,
     update_announcement_stats_for_delivery_batch,
 )
@@ -615,6 +616,85 @@ class DeliveryStatsDatabaseTests(TestCase):
         self.assertEqual(stats.sent_count, 1)
         self.assertEqual(stats.failed_count, 0)
 
+    def test_reconciliation_recomputes_stats_and_marks_announcement_sent_when_complete(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        stats = AnnouncementStats.objects.create(
+            announcement=announcement,
+            local=local,
+            target_count=999,
+            sent_count=999,
+            failed_count=999,
+            read_count=999,
+            acknowledged_count=999,
+        )
+        self.recipient(
+            announcement,
+            self.member(local, 'sent@example.com'),
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+            read_at=timezone.now(),
+            acknowledged_at=timezone.now(),
+        )
+        self.recipient(
+            announcement,
+            self.member(local, 'failed@example.com'),
+            delivery_status=AnnouncementRecipient.DeliveryStatus.FAILED,
+        )
+
+        completed = reconcile_announcement_stats(announcement.id)
+
+        self.assertTrue(completed)
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(stats.target_count, 2)
+        self.assertEqual(stats.sent_count, 1)
+        self.assertEqual(stats.failed_count, 1)
+        self.assertEqual(stats.read_count, 1)
+        self.assertEqual(stats.acknowledged_count, 1)
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
+        self.assertIsNotNone(announcement.sent_at)
+
+    def test_reconciliation_does_not_mark_sent_while_pending_recipients_remain(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        stats = AnnouncementStats.objects.create(announcement=announcement, local=local)
+        self.recipient(
+            announcement,
+            self.member(local, 'sent@example.com'),
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        )
+        self.recipient(announcement, self.member(local, 'pending@example.com'))
+
+        completed = reconcile_announcement_stats(announcement.id)
+
+        self.assertFalse(completed)
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(stats.target_count, 2)
+        self.assertEqual(stats.sent_count, 1)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.QUEUED)
+        self.assertIsNone(announcement.sent_at)
+
+    def test_reconciliation_marks_announcement_sent_once(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        AnnouncementStats.objects.create(announcement=announcement, local=local)
+        self.recipient(
+            announcement,
+            self.member(local, 'sent@example.com'),
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        )
+
+        first_completed = reconcile_announcement_stats(announcement.id)
+        second_completed = reconcile_announcement_stats(announcement.id)
+
+        self.assertTrue(first_completed)
+        self.assertFalse(second_completed)
+
     def member(self, local, email, role=Member.Role.MEMBER):
         return Member.objects.create_user(
             email=email,
@@ -774,6 +854,7 @@ class DeliveryTaskTests(SimpleTestCase):
         self.assertIsNotNone(update_kwargs['updated_at'])
 
     @patch('callouts.tasks.update_announcement_stats_for_delivery_batch')
+    @patch('callouts.tasks.reconcile_completed_announcements', return_value=0)
     @patch('callouts.tasks.mark_recipients_sent', return_value={'announcement-id': 1})
     @patch('callouts.tasks.mark_temporary_delivery_failure', return_value=(1, True))
     @patch('callouts.tasks.fake_push_delivery')
@@ -786,6 +867,7 @@ class DeliveryTaskTests(SimpleTestCase):
         fake_push_delivery,
         mark_temporary_delivery_failure,
         mark_recipients_sent,
+        reconcile_completed_announcements,
         update_announcement_stats_for_delivery_batch,
     ):
         success_recipient = SimpleNamespace(id='success-id', attempt_count=0, announcement_id='announcement-id')

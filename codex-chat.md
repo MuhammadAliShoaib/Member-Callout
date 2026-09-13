@@ -639,3 +639,21 @@ For each batch:
 - atomically update stats once
 
 Retries and duplicate tasks must not double-count.
+
+### User Prompt
+
+Create announcement stats reconciliation.
+
+Calculate from AnnouncementRecipient:
+- target_count
+- sent_count
+- failed_count
+- read_count
+- acknowledged_count
+
+When no pending recipients remain:
+- reconcile stats
+- mark announcement sent
+- set sent_at
+
+Make concurrent completion safe.

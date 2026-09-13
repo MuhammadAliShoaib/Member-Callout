@@ -8,7 +8,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
-from callouts.models import AnnouncementRecipient, AnnouncementStats
+from callouts.models import Announcement, AnnouncementRecipient, AnnouncementStats
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,61 @@ def update_announcement_stats_for_delivery_batch(stats_counts):
         )
 
 
+def reconcile_announcement_stats(announcement_id):
+    with transaction.atomic():
+        announcement = Announcement.objects.select_for_update().get(id=announcement_id)
+        stats, _ = AnnouncementStats.objects.select_for_update().get_or_create(
+            announcement=announcement,
+            defaults={'local': announcement.local},
+        )
+        recipients = AnnouncementRecipient.objects.filter(announcement_id=announcement_id)
+        pending_exists = recipients.filter(
+            delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+        ).exists()
+
+        stats.local = announcement.local
+        stats.target_count = recipients.values('member_id').distinct().count()
+        stats.sent_count = recipients.filter(
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        ).count()
+        stats.failed_count = recipients.filter(
+            delivery_status=AnnouncementRecipient.DeliveryStatus.FAILED,
+        ).count()
+        stats.read_count = recipients.filter(read_at__isnull=False).count()
+        stats.acknowledged_count = recipients.filter(acknowledged_at__isnull=False).count()
+        stats.save(update_fields=[
+            'local',
+            'target_count',
+            'sent_count',
+            'failed_count',
+            'read_count',
+            'acknowledged_count',
+            'updated_at',
+        ])
+
+        if pending_exists:
+            return False
+
+        sent_at = timezone.now()
+        updated = Announcement.objects.filter(
+            id=announcement_id,
+            status=Announcement.Status.QUEUED,
+        ).update(
+            status=Announcement.Status.SENT,
+            sent_at=sent_at,
+        )
+        return bool(updated)
+
+
+def reconcile_completed_announcements(announcement_ids):
+    completed_count = 0
+
+    for announcement_id in announcement_ids:
+        completed_count += int(reconcile_announcement_stats(announcement_id))
+
+    return completed_count
+
+
 def add_stats_count(stats_counts, announcement_id, field, count):
     if not count:
         return
@@ -225,6 +280,7 @@ def deliver_recipient_batch(recipient_ids):
         add_stats_count(stats_counts, announcement_id, 'sent', sent_count)
 
     update_announcement_stats_for_delivery_batch(stats_counts)
+    completed_announcements = reconcile_completed_announcements(stats_counts.keys())
 
     if retryable_ids:
         next_attempt_count = min(recipient.attempt_count + 1 for recipient in recipients if recipient.id in retryable_ids)
@@ -238,4 +294,5 @@ def deliver_recipient_batch(recipient_ids):
         'temporary_failures': temporary_failures,
         'terminal_failures': terminal_failures,
         'retryable': len(retryable_ids),
+        'completed_announcements': completed_announcements,
     }
