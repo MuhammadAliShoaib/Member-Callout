@@ -711,3 +711,17 @@ Verify:
 - no duplicate recipient processing
 - retries remain safe
 - stats remain correct
+
+### User Prompt
+
+Add a delivery load test for an announcement with 22,400 recipients.
+
+Measure:
+- audience expansion time
+- recipient creation time
+- Celery task count
+- delivery throughput
+- database query count where practical
+
+Do not optimize blindly.
+Report bottlenecks first.

@@ -592,6 +592,21 @@ class DeliverAnnouncementsCommandTests(TestCase):
         return AnnouncementRecipient.objects.create(**defaults)
 
 
+class LoadTestDeliveryCommandTests(TestCase):
+    def test_load_test_delivery_reports_metrics_and_cleans_up(self):
+        out = StringIO()
+
+        call_command('load_test_delivery', '--recipients', '3', stdout=out)
+
+        output = out.getvalue()
+        self.assertIn('Bottlenecks first:', output)
+        self.assertIn('- target_recipients: 3', output)
+        self.assertIn('- recipients_created_or_matched: 3', output)
+        self.assertIn('- celery_task_count: 1', output)
+        self.assertIn('- delivered_count: 3', output)
+        self.assertFalse(Local.objects.filter(name__startswith='Load Test Local').exists())
+
+
 class DeliveryStatsDatabaseTests(TestCase):
     def test_duplicate_sent_transition_does_not_double_count_stats(self):
         local = Local.objects.create(name='Local 27')
