@@ -396,7 +396,7 @@ class AnnouncementAIRegenerateEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
-            {'generated_text': "Please attend tomorrow's meeting at 6 PM."},
+            {'generated_text': "Please attend tomorrow's meeting at 6 PM.", 'client_request_id': None},
         )
         regenerate.assert_called_once_with(
             'Meeting tomorrow at 6 PM.',
@@ -404,6 +404,25 @@ class AnnouncementAIRegenerateEndpointTests(TestCase):
         )
         self.assertEqual(Announcement.objects.count(), 0)
         self.assertEqual(AnnouncementRecipient.objects.count(), 0)
+
+    def test_echoes_client_request_id(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            return_value='Meeting text.',
+        ):
+            response = self.client.post(
+                self.url,
+                {
+                    'text': 'Meeting tomorrow at 6 PM.',
+                    'client_request_id': 'abc-123-uuid',
+                },
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['client_request_id'], 'abc-123-uuid')
 
     def test_instruction_is_optional(self):
         self.authenticate(self.leader)

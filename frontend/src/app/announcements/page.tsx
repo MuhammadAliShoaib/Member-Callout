@@ -53,6 +53,7 @@ export default function AnnouncementsPage() {
   const [aiError, setAiError] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState('');
   const aiGeneration = useRef(0);
+  const aiNoteRef = useRef<string>('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -155,9 +156,16 @@ export default function AnnouncementsPage() {
     setAiSuggestion('');
     setAiLoading(true);
     const id = ++aiGeneration.current;
+    const clientRequestId = crypto.randomUUID();
+    const noteAtRequestTime = aiNoteRef.current;
     try {
-      const result = await apiAIRegenerate(token, aiNote.trim());
+      const result = await apiAIRegenerate(token, aiNote.trim(), undefined, clientRequestId);
       if (id !== aiGeneration.current) return;
+      if (result.client_request_id !== clientRequestId) return;
+      if (aiNoteRef.current !== noteAtRequestTime) {
+        setAiError('AI suggestion discarded because the note changed while it was being generated.');
+        return;
+      }
       setAiSuggestion(result.generated_text);
     } catch (err) {
       if (id !== aiGeneration.current) return;
@@ -381,7 +389,7 @@ export default function AnnouncementsPage() {
                 id="ai-note"
                 className="form-textarea"
                 value={aiNote}
-                onChange={e => setAiNote(e.target.value)}
+                onChange={e => { setAiNote(e.target.value); aiNoteRef.current = e.target.value; }}
                 rows={3}
                 placeholder="Jot down what you want to say — the AI will clean it up into a proper announcement."
               />

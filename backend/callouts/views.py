@@ -423,6 +423,9 @@ def announcement_ai_regenerate(request):
     normalized_text = text.strip()
     normalized_instruction = instruction.strip() if isinstance(instruction, str) and instruction.strip() else None
 
+    client_request_id = request.data.get('client_request_id')
+    normalized_client_request_id = client_request_id if isinstance(client_request_id, str) else None
+
     try:
         generated_text = regenerate_announcement_text(normalized_text, normalized_instruction)
     except LLMServiceError as exc:
@@ -431,7 +434,7 @@ def announcement_ai_regenerate(request):
             status=llm_error_status(exc),
         )
 
-    return Response({'generated_text': generated_text})
+    return Response({'generated_text': generated_text, 'client_request_id': normalized_client_request_id})
 
 
 def llm_error_status(error):

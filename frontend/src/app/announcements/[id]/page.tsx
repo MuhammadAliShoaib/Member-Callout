@@ -50,12 +50,14 @@ export default function AnnouncementDetailPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const aiGeneration = useRef(0);
+  const bodyRef = useRef<string>('');
 
   function populate(a: Announcement) {
     setAnnouncement(a);
     statusRef.current = a.status;
     setTitle(a.title);
     setBody(a.body);
+    bodyRef.current = a.body;
     setPushPreview(a.push_preview);
     setClassification(a.target_classification ?? '');
     setNeedsAck(a.needs_ack);
@@ -106,6 +108,7 @@ export default function AnnouncementDetailPage() {
         setAnnouncement(a);
         setTitle(a.title);
         setBody(a.body);
+        bodyRef.current = a.body;
         setPushPreview(a.push_preview);
         setClassification(a.target_classification ?? '');
         setNeedsAck(a.needs_ack);
@@ -154,11 +157,18 @@ export default function AnnouncementDetailPage() {
     setAiSuggestion('');
     setAiLoading(true);
     const requestId = ++aiGeneration.current;
+    const clientRequestId = crypto.randomUUID();
+    const bodyAtRequestTime = bodyRef.current;
     try {
-      const result = await apiAIRegenerate(token, body.trim(), aiInstruction.trim() || undefined);
+      const result = await apiAIRegenerate(token, body.trim(), aiInstruction.trim() || undefined, clientRequestId);
       if (requestId !== aiGeneration.current) return;
+      if (result.client_request_id !== clientRequestId) return;
       if (statusRef.current !== 'draft') {
         setAiError('AI suggestion discarded because this announcement is no longer a draft.');
+        return;
+      }
+      if (bodyRef.current !== bodyAtRequestTime) {
+        setAiError('AI suggestion discarded because the body text changed while it was being generated.');
         return;
       }
       setAiSuggestion(result.generated_text);
@@ -178,6 +188,7 @@ export default function AnnouncementDetailPage() {
       return;
     }
     setBody(aiSuggestion);
+    bodyRef.current = aiSuggestion;
     setAiSuggestion('');
   }
 
@@ -264,7 +275,7 @@ export default function AnnouncementDetailPage() {
                 id="body"
                 className="form-textarea"
                 value={body}
-                onChange={e => setBody(e.target.value)}
+                onChange={e => { setBody(e.target.value); bodyRef.current = e.target.value; }}
                 rows={6}
               />
             </div>

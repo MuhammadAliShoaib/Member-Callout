@@ -49,6 +49,7 @@ export interface AIDraft {
 
 export interface AIRegeneration {
   generated_text: string;
+  client_request_id: string | null;
 }
 
 export interface AnnouncementStats {
@@ -98,7 +99,7 @@ export function apiAIDraft(token: string, note: string) {
   );
 }
 
-export function apiAIRegenerate(token: string, text: string, instruction?: string) {
+export function apiAIRegenerate(token: string, text: string, instruction?: string, clientRequestId?: string) {
   return request<AIRegeneration>(
     '/api/announcements/ai/regenerate/',
     {
@@ -106,6 +107,7 @@ export function apiAIRegenerate(token: string, text: string, instruction?: strin
       body: JSON.stringify({
         text,
         instruction: instruction?.trim() || undefined,
+        ...(clientRequestId !== undefined ? { client_request_id: clientRequestId } : {}),
       }),
     },
     token,
