@@ -12,7 +12,11 @@ from callouts.ai import (
 )
 from callouts.models import Announcement, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
-from callouts.views import announcement_content_hash, announcement_content_is_confirmed
+from callouts.views import (
+    announcement_audience_filters,
+    announcement_content_hash,
+    announcement_content_is_confirmed,
+)
 
 
 class ActiveLeaderPermissionTests(SimpleTestCase):
@@ -190,3 +194,35 @@ class AnnouncementConfirmationTests(SimpleTestCase):
         }
         defaults.update(overrides)
         return Announcement(**defaults)
+
+
+class AnnouncementAudienceTests(SimpleTestCase):
+    def test_audience_filters_include_same_local_and_active_members(self):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+
+        self.assertEqual(
+            announcement_audience_filters(announcement),
+            {
+                'local_id': local.id,
+                'status': Member.Status.ACTIVE,
+                'is_active': True,
+            },
+        )
+
+    def test_audience_filters_include_target_classification_when_specified(self):
+        local = Local(name='Local 27')
+        announcement = Announcement(
+            local=local,
+            target_classification='journeyman',
+        )
+
+        self.assertEqual(
+            announcement_audience_filters(announcement),
+            {
+                'local_id': local.id,
+                'status': Member.Status.ACTIVE,
+                'is_active': True,
+                'classification': 'journeyman',
+            },
+        )

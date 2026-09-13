@@ -12,7 +12,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from callouts.ai import AIError, get_announcement_draft_ai
-from callouts.models import Announcement
+from callouts.models import Announcement, AnnouncementStats, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
 from callouts.tenant import for_request_local
@@ -25,6 +25,34 @@ def announcement_content_hash(announcement):
 
 def announcement_content_is_confirmed(announcement):
     return announcement.confirmed_content_hash == announcement_content_hash(announcement)
+
+
+def announcement_audience_filters(announcement):
+    filters = {
+        'local_id': announcement.local_id,
+        'status': Member.Status.ACTIVE,
+        'is_active': True,
+    }
+
+    if announcement.target_classification:
+        filters['classification'] = announcement.target_classification
+
+    return filters
+
+
+def announcement_audience_queryset(announcement):
+    return Member.objects.filter(**announcement_audience_filters(announcement))
+
+
+def update_announcement_target_count(announcement):
+    stats, _ = AnnouncementStats.objects.get_or_create(
+        announcement=announcement,
+        defaults={'local': announcement.local},
+    )
+    stats.local = announcement.local
+    stats.target_count = announcement_audience_queryset(announcement).count()
+    stats.save(update_fields=['local', 'target_count', 'updated_at'])
+    return stats
 
 
 @api_view(['GET'])
@@ -156,6 +184,7 @@ def announcement_send(request, announcement_id):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            update_announcement_target_count(announcement)
             return Response(AnnouncementSerializer(announcement).data)
 
         if announcement.status != Announcement.Status.CONFIRMED:
@@ -173,5 +202,6 @@ def announcement_send(request, announcement_id):
         announcement.status = Announcement.Status.QUEUED
         announcement.queued_at = timezone.now()
         announcement.save(update_fields=['status', 'queued_at'])
+        update_announcement_target_count(announcement)
 
     return Response(AnnouncementSerializer(announcement).data)

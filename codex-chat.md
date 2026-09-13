@@ -360,3 +360,11 @@ Only one concurrent request may successfully claim the announcement.
 Retries must be idempotent.
 Use PostgreSQL for correctness.
 
+### User Prompt
+
+When an announcement is queued, calculate its audience.
+
+Include only:
+- same local
+- active members
+- matching target_classification when specified
