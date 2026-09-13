@@ -392,3 +392,13 @@ python manage.py deliver_announcements
 Process pending AnnouncementRecipient records.
 
 Fake push delivery by logging the notification.
+
+### User Prompt
+
+Add Celery to the Django project using Redis as the broker.
+
+Use CELERY_BROKER_URL from environment variables.
+
+Configure task autodiscovery.
+
+Do not change existing delivery logic yet.

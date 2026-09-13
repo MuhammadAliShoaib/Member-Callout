@@ -40,6 +40,8 @@ CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
 AI_PROVIDER = os.environ.get('AI_PROVIDER', 'fake')
 AI_API_KEY = os.environ.get('AI_API_KEY', '')
 
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+
 
 # Application definition
 
