@@ -382,3 +382,13 @@ Duplicate/retried audience expansion must not create duplicate recipients.
 Create/update AnnouncementStats after audience expansion.
 
 Set target_count to the number of unique recipients.
+
+### User Prompt
+
+Create:
+
+python manage.py deliver_announcements
+
+Process pending AnnouncementRecipient records.
+
+Fake push delivery by logging the notification.
