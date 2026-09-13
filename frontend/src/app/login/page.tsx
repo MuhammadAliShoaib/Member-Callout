@@ -13,9 +13,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (getToken()) {
-      router.replace('/announcements/new');
-    }
+    if (getToken()) router.replace('/announcements');
   }, [router]);
 
   async function handleSubmit(e: FormEvent) {
@@ -25,7 +23,7 @@ export default function LoginPage() {
     try {
       const { token, member } = await apiLogin(email, password);
       setAuth(token, member);
-      router.replace('/announcements/new');
+      router.replace('/announcements');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed.');
     } finally {
@@ -34,52 +32,43 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="login-wrap">
-      <div className="login-card card">
-        <h1 className="login-heading">Member Callout</h1>
-        <p className="login-sub">Sign in to your account</p>
+    <div style={{ maxWidth: 360, margin: '80px auto', padding: '0 16px' }}>
+      <h1 style={{ marginBottom: 24 }}>Sign in</h1>
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label" htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              className="form-input"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-              autoFocus
-            />
-          </div>
+      <form onSubmit={handleSubmit}>
+        <div className="form-group">
+          <label className="form-label" htmlFor="email">Email</label>
+          <input
+            id="email"
+            type="email"
+            className="form-input"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+            autoComplete="email"
+            autoFocus
+          />
+        </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              className="form-input"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-            />
-          </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            className="form-input"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            autoComplete="current-password"
+          />
+        </div>
 
-          {error && <p className="error-msg">{error}</p>}
+        {error && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 12 }}>{error}</p>}
 
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={loading}
-            style={{ width: '100%', marginTop: '20px' }}
-          >
-            {loading ? <span className="spinner" /> : null}
-            {loading ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
-      </div>
+        <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%' }}>
+          {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
     </div>
   );
 }

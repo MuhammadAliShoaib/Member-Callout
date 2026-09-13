@@ -270,13 +270,17 @@ def announcement_ai_draft(request):
     return Response(draft)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH'])
 @permission_classes([IsActiveLeaderInOwnLocal])
 def announcement_detail(request, announcement_id):
     announcement = get_object_or_404(
         for_request_local(Announcement.objects.all(), request),
         id=announcement_id,
     )
+    if request.method == 'PATCH':
+        serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        announcement = serializer.save()
     return Response(AnnouncementSerializer(announcement).data)
 
 
@@ -346,3 +350,34 @@ def announcement_send(request, announcement_id):
         expand_and_enqueue_announcement_recipients(announcement)
 
     return Response(AnnouncementSerializer(announcement).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcement_stats(request, announcement_id):
+    announcement = get_object_or_404(
+        for_request_local(Announcement.objects.all(), request),
+        id=announcement_id,
+    )
+    try:
+        s = announcement.stats
+    except AnnouncementStats.DoesNotExist:
+        return Response(
+            {'detail': 'Stats not available yet.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    etag = f'"{s.updated_at.isoformat()}"'
+    if request.META.get('HTTP_IF_NONE_MATCH') == etag:
+        return Response(status=status.HTTP_304_NOT_MODIFIED)
+    response = Response({
+        'target_count': s.target_count,
+        'sent_count': s.sent_count,
+        'failed_count': s.failed_count,
+        'read_count': s.read_count,
+        'acknowledged_count': s.acknowledged_count,
+        'coming_count': s.coming_count,
+        'cant_come_count': s.cant_come_count,
+        'updated_at': s.updated_at,
+    })
+    response['ETag'] = etag
+    return response

@@ -1,24 +1,16 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-  token?: string,
-): Promise<T> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Token ${token}` } : {}),
-  };
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: { ...headers, ...(options.headers as Record<string, string> ?? {}) },
-  });
-  const data: unknown = await res.json();
+async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Token ${token}`;
+
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  const data = await res.json().catch(() => null) as { detail?: string } | null;
+
   if (!res.ok) {
-    const err = data as Record<string, unknown>;
-    const message = typeof err?.detail === 'string' ? err.detail : JSON.stringify(data);
-    throw new Error(message);
+    throw new Error(data?.detail ?? res.statusText);
   }
+
   return data as T;
 }
 
@@ -52,6 +44,17 @@ export interface AIDraft {
   title: string;
   body: string;
   push_preview: string;
+}
+
+export interface AnnouncementStats {
+  target_count: number;
+  sent_count: number;
+  failed_count: number;
+  read_count: number;
+  acknowledged_count: number;
+  coming_count: number;
+  cant_come_count: number;
+  updated_at: string;
 }
 
 export function apiLogin(email: string, password: string) {
@@ -90,6 +93,24 @@ export function apiGetAnnouncement(token: string, id: string) {
   return request<Announcement>(`/api/announcements/${id}/`, {}, token);
 }
 
+export function apiUpdateAnnouncement(
+  token: string,
+  id: string,
+  data: {
+    title?: string;
+    body?: string;
+    push_preview?: string;
+    target_classification?: string | null;
+    needs_ack?: boolean;
+  },
+) {
+  return request<Announcement>(
+    `/api/announcements/${id}/`,
+    { method: 'PATCH', body: JSON.stringify(data) },
+    token,
+  );
+}
+
 export function apiConfirmAnnouncement(token: string, id: string) {
   return request<Announcement>(
     `/api/announcements/${id}/confirm/`,
@@ -104,4 +125,22 @@ export function apiSendAnnouncement(token: string, id: string) {
     { method: 'POST' },
     token,
   );
+}
+
+export function apiGetAnnouncementStats(token: string, id: string) {
+  return request<AnnouncementStats>(`/api/announcements/${id}/stats/`, {}, token);
+}
+
+export async function apiPollAnnouncementStats(
+  token: string,
+  id: string,
+  ifNoneMatch: string | null,
+): Promise<{ data: AnnouncementStats; etag: string } | null> {
+  const headers: Record<string, string> = { Authorization: `Token ${token}` };
+  if (ifNoneMatch) headers['If-None-Match'] = ifNoneMatch;
+  const res = await fetch(`${BASE}/api/announcements/${id}/stats/`, { headers });
+  if (res.status === 304) return null;
+  const data = await res.json().catch(() => null) as AnnouncementStats | { detail?: string } | null;
+  if (!res.ok) throw new Error((data as { detail?: string } | null)?.detail ?? res.statusText);
+  return { data: data as AnnouncementStats, etag: res.headers.get('ETag') ?? '' };
 }
