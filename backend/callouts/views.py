@@ -114,15 +114,6 @@ def expand_announcement_audience(announcement):
     return created_count
 
 
-def announcement_recipients_for_audience(announcement):
-    return [
-        announcement_recipient_for_member(announcement, member)
-        for member in announcement_audience_queryset(announcement)
-        .only('id', 'classification')
-        .order_by('id')[:MAX_ANNOUNCEMENT_RECIPIENTS]
-    ]
-
-
 def announcement_audience_values(announcement):
     return announcement_audience_values_queryset(announcement).iterator(
         chunk_size=AUDIENCE_QUERY_CHUNK_SIZE,

@@ -561,3 +561,15 @@ Before creating recipients:
 Return a clear validation error.
 
 Do not rely on frontend validation.
+
+### User Prompt
+
+Make audience expansion memory efficient.
+
+Requirements:
+- never load all eligible members into memory
+- iterate member IDs in chunks
+- bulk-create AnnouncementRecipient rows
+- use bounded batch sizes
+
+Maximum target audience is 22,400.

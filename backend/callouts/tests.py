@@ -25,10 +25,12 @@ from callouts.tasks import (
     retry_countdown,
 )
 from callouts.views import (
+    AUDIENCE_QUERY_CHUNK_SIZE,
     MAX_ANNOUNCEMENT_RECIPIENTS,
     RECIPIENT_BULK_CREATE_BATCH_SIZE,
     announcement_audience_count,
     announcement_audience_filters,
+    announcement_audience_values,
     announcement_audience_values_queryset,
     announcement_content_hash,
     announcement_content_is_confirmed,
@@ -278,6 +280,18 @@ class AnnouncementAudienceTests(SimpleTestCase):
 
         self.assertEqual(count, announcement_audience_queryset.return_value.count.return_value)
         announcement_audience_queryset.return_value.count.assert_called_once_with()
+
+    @patch('callouts.views.announcement_audience_values_queryset')
+    def test_audience_values_iterates_database_rows_in_chunks(self, announcement_audience_values_queryset):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+
+        values = announcement_audience_values(announcement)
+
+        self.assertEqual(values, announcement_audience_values_queryset.return_value.iterator.return_value)
+        announcement_audience_values_queryset.return_value.iterator.assert_called_once_with(
+            chunk_size=AUDIENCE_QUERY_CHUNK_SIZE,
+        )
 
     @patch('callouts.views.announcement_audience_count')
     def test_oversized_audience_returns_clear_validation_error(self, announcement_audience_count):
