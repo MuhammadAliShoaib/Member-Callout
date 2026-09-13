@@ -368,3 +368,11 @@ Include only:
 - same local
 - active members
 - matching target_classification when specified
+
+### User Prompt
+
+Bulk-create AnnouncementRecipient rows for the audience.
+
+Use the UNIQUE(announcement, member) constraint.
+
+Duplicate/retried audience expansion must not create duplicate recipients.

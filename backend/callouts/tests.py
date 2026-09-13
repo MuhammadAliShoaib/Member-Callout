@@ -16,6 +16,7 @@ from callouts.views import (
     announcement_audience_filters,
     announcement_content_hash,
     announcement_content_is_confirmed,
+    announcement_recipient_for_member,
 )
 
 
@@ -226,3 +227,15 @@ class AnnouncementAudienceTests(SimpleTestCase):
                 'classification': 'journeyman',
             },
         )
+
+    def test_audience_recipients_use_announcement_local_and_member_snapshot(self):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+        member = Member(local=local, classification='journeyman')
+
+        recipient = announcement_recipient_for_member(announcement, member)
+
+        self.assertEqual(recipient.local, local)
+        self.assertEqual(recipient.announcement, announcement)
+        self.assertEqual(recipient.member_id, member.id)
+        self.assertEqual(recipient.classification_snapshot, 'journeyman')
