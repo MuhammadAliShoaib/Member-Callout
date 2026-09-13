@@ -429,3 +429,18 @@ pending | sent | failed
 Do not add processing status.
 
 Create the migration.
+
+### User Prompt
+
+Create a Celery task:
+
+deliver_recipient_batch(recipient_ids)
+
+Requirements:
+- maximum 250 IDs per batch
+- fetch recipients efficiently
+- process only pending recipients
+- ignore sent/failed recipients
+- pass IDs only, never Django objects
+
+Do not implement retries yet.

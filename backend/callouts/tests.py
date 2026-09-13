@@ -12,6 +12,7 @@ from callouts.ai import (
 )
 from callouts.models import Announcement, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
+from callouts.tasks import MAX_RECIPIENT_BATCH_SIZE, deliver_recipient_batch
 from callouts.views import (
     announcement_audience_filters,
     announcement_content_hash,
@@ -239,3 +240,14 @@ class AnnouncementAudienceTests(SimpleTestCase):
         self.assertEqual(recipient.announcement, announcement)
         self.assertEqual(recipient.member_id, member.id)
         self.assertEqual(recipient.classification_snapshot, 'journeyman')
+
+
+class DeliveryTaskTests(SimpleTestCase):
+    def test_recipient_batch_has_250_id_limit(self):
+        recipient_ids = [str(number) for number in range(MAX_RECIPIENT_BATCH_SIZE + 1)]
+
+        with self.assertRaises(ValueError):
+            deliver_recipient_batch.run(recipient_ids)
+
+    def test_delivery_task_accepts_ids_only_argument(self):
+        self.assertEqual(deliver_recipient_batch.name, 'callouts.tasks.deliver_recipient_batch')
