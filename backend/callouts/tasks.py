@@ -5,7 +5,7 @@ from datetime import timedelta
 from celery import shared_task
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from callouts.models import AnnouncementRecipient
@@ -13,6 +13,14 @@ from callouts.models import AnnouncementRecipient
 logger = logging.getLogger(__name__)
 
 MAX_RECIPIENT_BATCH_SIZE = 250
+
+
+class TemporaryDeliveryError(Exception):
+    pass
+
+
+class TerminalDeliveryError(Exception):
+    pass
 
 
 def worker_id():
@@ -33,6 +41,7 @@ def claim_pending_recipients(recipient_ids, claimed_by):
             .filter(
                 id__in=recipient_ids,
                 delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+                attempt_count__lt=settings.MAX_DELIVERY_ATTEMPTS,
             )
             .filter(Q(claimed_at__isnull=True) | Q(claimed_at__lt=stale_before))
         )
@@ -64,6 +73,46 @@ def mark_recipients_sent(recipient_ids):
     )
 
 
+def mark_temporary_delivery_failure(recipient, error):
+    next_attempt_count = recipient.attempt_count + 1
+    delivery_status = AnnouncementRecipient.DeliveryStatus.PENDING
+
+    if next_attempt_count >= settings.MAX_DELIVERY_ATTEMPTS:
+        delivery_status = AnnouncementRecipient.DeliveryStatus.FAILED
+
+    return AnnouncementRecipient.objects.filter(
+        id=recipient.id,
+        delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+    ).update(
+        attempt_count=F('attempt_count') + 1,
+        delivery_status=delivery_status,
+        last_error=str(error),
+        claimed_at=None,
+        claimed_by=None,
+    )
+
+
+def mark_terminal_delivery_failure(recipient, error):
+    return AnnouncementRecipient.objects.filter(
+        id=recipient.id,
+        delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+    ).update(
+        delivery_status=AnnouncementRecipient.DeliveryStatus.FAILED,
+        last_error=str(error),
+        claimed_at=None,
+        claimed_by=None,
+    )
+
+
+def fake_push_delivery(recipient):
+    logger.info(
+        'Fake push: %s | %s | %s',
+        recipient.member.email,
+        recipient.announcement.title,
+        recipient.announcement.push_preview,
+    )
+
+
 @shared_task
 def deliver_recipient_batch(recipient_ids):
     if len(recipient_ids) > MAX_RECIPIENT_BATCH_SIZE:
@@ -77,14 +126,24 @@ def deliver_recipient_batch(recipient_ids):
         )
     )
 
+    delivered_ids = []
+    temporary_failures = 0
+    terminal_failures = 0
+
     for recipient in recipients:
-        logger.info(
-            'Fake push: %s | %s | %s',
-            recipient.member.email,
-            recipient.announcement.title,
-            recipient.announcement.push_preview,
-        )
+        try:
+            fake_push_delivery(recipient)
+        except TemporaryDeliveryError as exc:
+            temporary_failures += mark_temporary_delivery_failure(recipient, exc)
+        except TerminalDeliveryError as exc:
+            terminal_failures += mark_terminal_delivery_failure(recipient, exc)
+        else:
+            delivered_ids.append(recipient.id)
 
-    processed = mark_recipients_sent([recipient.id for recipient in recipients])
+    processed = mark_recipients_sent(delivered_ids)
 
-    return {'processed': processed}
+    return {
+        'processed': processed,
+        'temporary_failures': temporary_failures,
+        'terminal_failures': terminal_failures,
+    }

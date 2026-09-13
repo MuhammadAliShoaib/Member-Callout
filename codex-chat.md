@@ -484,3 +484,20 @@ On success:
 - clear claimed_by
 
 Do not deliver already-sent recipients.
+
+### User Prompt
+
+Handle delivery failures.
+
+On temporary failure:
+- increment attempt_count
+- store last_error
+- clear the claim
+- keep delivery_status = pending
+
+On terminal failure:
+- set delivery_status = failed
+- store last_error
+- clear the claim
+
+Maximum attempts must be configurable.

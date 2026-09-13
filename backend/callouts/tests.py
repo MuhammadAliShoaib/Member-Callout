@@ -17,6 +17,8 @@ from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
     deliver_recipient_batch,
+    mark_temporary_delivery_failure,
+    mark_terminal_delivery_failure,
     mark_recipients_sent,
     recipient_claim_stale_before,
 )
@@ -277,5 +279,48 @@ class DeliveryTaskTests(SimpleTestCase):
         update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
         self.assertEqual(update_kwargs['delivery_status'], 'sent')
         self.assertIsNotNone(update_kwargs['sent_at'])
+        self.assertIsNone(update_kwargs['claimed_at'])
+        self.assertIsNone(update_kwargs['claimed_by'])
+
+    @patch('callouts.tasks.AnnouncementRecipient.objects')
+    def test_temporary_failure_keeps_pending_and_clears_claim(self, recipient_manager):
+        recipient = SimpleNamespace(id='recipient-id', attempt_count=0)
+
+        with self.settings(MAX_DELIVERY_ATTEMPTS=3):
+            mark_temporary_delivery_failure(recipient, RuntimeError('temporary outage'))
+
+        recipient_manager.filter.assert_called_once_with(
+            id='recipient-id',
+            delivery_status='pending',
+        )
+        update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
+        self.assertEqual(update_kwargs['delivery_status'], 'pending')
+        self.assertEqual(update_kwargs['last_error'], 'temporary outage')
+        self.assertIsNone(update_kwargs['claimed_at'])
+        self.assertIsNone(update_kwargs['claimed_by'])
+
+    @patch('callouts.tasks.AnnouncementRecipient.objects')
+    def test_temporary_failure_at_max_attempts_marks_failed(self, recipient_manager):
+        recipient = SimpleNamespace(id='recipient-id', attempt_count=2)
+
+        with self.settings(MAX_DELIVERY_ATTEMPTS=3):
+            mark_temporary_delivery_failure(recipient, RuntimeError('temporary outage'))
+
+        update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
+        self.assertEqual(update_kwargs['delivery_status'], 'failed')
+
+    @patch('callouts.tasks.AnnouncementRecipient.objects')
+    def test_terminal_failure_marks_failed_and_clears_claim(self, recipient_manager):
+        recipient = SimpleNamespace(id='recipient-id')
+
+        mark_terminal_delivery_failure(recipient, RuntimeError('bad token'))
+
+        recipient_manager.filter.assert_called_once_with(
+            id='recipient-id',
+            delivery_status='pending',
+        )
+        update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
+        self.assertEqual(update_kwargs['delivery_status'], 'failed')
+        self.assertEqual(update_kwargs['last_error'], 'bad token')
         self.assertIsNone(update_kwargs['claimed_at'])
         self.assertIsNone(update_kwargs['claimed_by'])
