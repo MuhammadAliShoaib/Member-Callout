@@ -2,6 +2,7 @@ import hashlib
 
 from django.contrib.auth import authenticate
 from django.db import transaction
+from django.db.models import F
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -189,6 +190,50 @@ def enqueue_recipient_delivery_batch(recipient_ids):
     deliver_recipient_batch.apply_async(args=[recipient_ids])
 
 
+def mark_recipient_read(recipient_id, announcement_id):
+    """Set read_at and increment read_count exactly once. Returns True if this call caused the first read."""
+    now = timezone.now()
+    with transaction.atomic():
+        updated = AnnouncementRecipient.objects.filter(
+            id=recipient_id,
+            read_at__isnull=True,
+        ).update(read_at=now)
+        if updated:
+            AnnouncementStats.objects.filter(
+                announcement_id=announcement_id,
+            ).update(
+                read_count=F('read_count') + 1,
+                updated_at=now,
+            )
+    return bool(updated)
+
+
+def mark_recipient_acknowledged(recipient_id, announcement_id):
+    """Set acknowledged_at (and read_at if unset) and increment counters exactly once.
+    Returns (read_incremented, ack_incremented)."""
+    now = timezone.now()
+    with transaction.atomic():
+        read_updated = AnnouncementRecipient.objects.filter(
+            id=recipient_id,
+            read_at__isnull=True,
+        ).update(read_at=now)
+        ack_updated = AnnouncementRecipient.objects.filter(
+            id=recipient_id,
+            acknowledged_at__isnull=True,
+        ).update(acknowledged_at=now)
+        stats_kwargs = {}
+        if read_updated:
+            stats_kwargs['read_count'] = F('read_count') + 1
+        if ack_updated:
+            stats_kwargs['acknowledged_count'] = F('acknowledged_count') + 1
+        if stats_kwargs:
+            stats_kwargs['updated_at'] = now
+            AnnouncementStats.objects.filter(
+                announcement_id=announcement_id,
+            ).update(**stats_kwargs)
+    return bool(read_updated), bool(ack_updated)
+
+
 @api_view(['GET'])
 def member_announcement_detail(request, announcement_id):
     announcement = get_object_or_404(Announcement, id=announcement_id)
@@ -203,6 +248,7 @@ def member_announcement_detail(request, announcement_id):
             {'detail': 'You are not a recipient of this announcement.'},
             status=status.HTTP_403_FORBIDDEN,
         )
+    mark_recipient_read(recipient.id, announcement.id)
     return Response({
         'id': str(announcement.id),
         'title': announcement.title,
@@ -227,12 +273,7 @@ def member_announcement_acknowledge(request, announcement_id):
             {'detail': 'You are not a recipient of this announcement.'},
             status=status.HTTP_403_FORBIDDEN,
         )
-    if recipient.acknowledged_at is None:
-        now = timezone.now()
-        recipient.acknowledged_at = now
-        if recipient.read_at is None:
-            recipient.read_at = now
-        recipient.save(update_fields=['acknowledged_at', 'read_at'])
+    mark_recipient_acknowledged(recipient.id, announcement.id)
     return Response({'is_acknowledged': True})
 
 

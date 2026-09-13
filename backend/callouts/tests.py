@@ -49,6 +49,8 @@ from callouts.views import (
     enqueue_pending_recipients_for_delivery,
     expand_and_enqueue_announcement_recipients,
     expand_announcement_audience,
+    mark_recipient_acknowledged,
+    mark_recipient_read,
     validate_announcement_audience_size,
 )
 
@@ -1193,3 +1195,128 @@ class DeliveryTaskTests(SimpleTestCase):
         self.assertEqual(result['processed'], 1)
         self.assertEqual(result['temporary_failures'], 1)
         self.assertEqual(result['retryable'], 1)
+
+
+class AnnouncementReadAcknowledgeTests(TestCase):
+    def setUp(self):
+        self.local = Local.objects.create(name='Local 27')
+        self.leader = self.make_member(self.local, 'leader@example.com', role=Member.Role.LEADER)
+        self.member = self.make_member(self.local, 'member@example.com')
+        self.announcement = self.make_announcement(self.local, self.leader)
+        self.stats = AnnouncementStats.objects.create(
+            announcement=self.announcement,
+            local=self.local,
+            target_count=1,
+            sent_count=1,
+        )
+        self.recipient = AnnouncementRecipient.objects.create(
+            local=self.local,
+            announcement=self.announcement,
+            member=self.member,
+            classification_snapshot=self.member.classification,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+            sent_at=timezone.now(),
+        )
+
+    def test_first_read_sets_read_at_and_increments_read_count(self):
+        result = mark_recipient_read(self.recipient.id, self.announcement.id)
+
+        self.assertTrue(result)
+        self.recipient.refresh_from_db()
+        self.stats.refresh_from_db()
+        self.assertIsNotNone(self.recipient.read_at)
+        self.assertEqual(self.stats.read_count, 1)
+
+    def test_repeated_read_does_not_increment_read_count(self):
+        mark_recipient_read(self.recipient.id, self.announcement.id)
+        result = mark_recipient_read(self.recipient.id, self.announcement.id)
+
+        self.assertFalse(result)
+        self.stats.refresh_from_db()
+        self.assertEqual(self.stats.read_count, 1)
+
+    def test_first_acknowledge_when_unread_sets_read_at_and_increments_both_counts(self):
+        read_incremented, ack_incremented = mark_recipient_acknowledged(
+            self.recipient.id, self.announcement.id
+        )
+
+        self.assertTrue(read_incremented)
+        self.assertTrue(ack_incremented)
+        self.recipient.refresh_from_db()
+        self.stats.refresh_from_db()
+        self.assertIsNotNone(self.recipient.read_at)
+        self.assertIsNotNone(self.recipient.acknowledged_at)
+        self.assertEqual(self.stats.read_count, 1)
+        self.assertEqual(self.stats.acknowledged_count, 1)
+
+    def test_first_acknowledge_when_already_read_only_increments_acknowledged_count(self):
+        mark_recipient_read(self.recipient.id, self.announcement.id)
+
+        read_incremented, ack_incremented = mark_recipient_acknowledged(
+            self.recipient.id, self.announcement.id
+        )
+
+        self.assertFalse(read_incremented)
+        self.assertTrue(ack_incremented)
+        self.stats.refresh_from_db()
+        self.assertEqual(self.stats.read_count, 1)
+        self.assertEqual(self.stats.acknowledged_count, 1)
+
+    def test_read_then_acknowledge_does_not_double_increment_read_count(self):
+        mark_recipient_read(self.recipient.id, self.announcement.id)
+        mark_recipient_acknowledged(self.recipient.id, self.announcement.id)
+
+        self.stats.refresh_from_db()
+        self.assertEqual(self.stats.read_count, 1)
+        self.assertEqual(self.stats.acknowledged_count, 1)
+
+    def test_repeated_acknowledge_does_not_increment_counts(self):
+        mark_recipient_acknowledged(self.recipient.id, self.announcement.id)
+        read_incremented, ack_incremented = mark_recipient_acknowledged(
+            self.recipient.id, self.announcement.id
+        )
+
+        self.assertFalse(read_incremented)
+        self.assertFalse(ack_incremented)
+        self.stats.refresh_from_db()
+        self.assertEqual(self.stats.read_count, 1)
+        self.assertEqual(self.stats.acknowledged_count, 1)
+
+    def test_already_acknowledged_recipient_is_idempotent(self):
+        self.recipient.read_at = timezone.now()
+        self.recipient.acknowledged_at = timezone.now()
+        self.recipient.save(update_fields=['read_at', 'acknowledged_at'])
+
+        read_incremented, ack_incremented = mark_recipient_acknowledged(
+            self.recipient.id, self.announcement.id
+        )
+
+        self.assertFalse(read_incremented)
+        self.assertFalse(ack_incremented)
+        self.stats.refresh_from_db()
+        self.assertEqual(self.stats.read_count, 0)
+        self.assertEqual(self.stats.acknowledged_count, 0)
+
+    def make_member(self, local, email, role=Member.Role.MEMBER):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def make_announcement(self, local, created_by):
+        return Announcement.objects.create(
+            local=local,
+            created_by=created_by,
+            title='Meeting',
+            body='Meeting tonight.',
+            push_preview='Meeting tonight.',
+            status=Announcement.Status.SENT,
+            confirmed_content_hash='confirmed',
+            sent_at=timezone.now(),
+        )

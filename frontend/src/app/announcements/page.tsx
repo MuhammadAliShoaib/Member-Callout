@@ -8,6 +8,8 @@ import {
   apiAIDraft,
   apiConfirmAnnouncement,
   apiGetAnnouncementStats,
+  apiSendAnnouncement,
+  apiGetAnnouncement,
   type Announcement,
   type AIDraft,
   type AnnouncementStats,
@@ -38,6 +40,8 @@ export default function AnnouncementsPage() {
   const [panelStats, setPanelStats] = useState<AnnouncementStats | null>(null);
   const [panelStatsLoading, setPanelStatsLoading] = useState(false);
   const [panelStatsError, setPanelStatsError] = useState('');
+  const [panelSendLoading, setPanelSendLoading] = useState(false);
+  const [panelSendError, setPanelSendError] = useState('');
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -102,10 +106,29 @@ export default function AnnouncementsPage() {
     setPanel(null);
     setPanelStats(null);
     setPanelStatsError('');
+    setPanelSendError('');
+  }
+
+  async function handlePanelSend() {
+    if (!panel) return;
+    const token = getToken();
+    if (!token) return;
+    setPanelSendError('');
+    setPanelSendLoading(true);
+    try {
+      const updated = await apiSendAnnouncement(token, panel.id);
+      setPanel(updated);
+      setList(prev => prev.map(a => a.id === updated.id ? updated : a));
+      loadPanelStats(updated.id);
+    } catch (err) {
+      setPanelSendError(err instanceof Error ? err.message : 'Failed to send.');
+    } finally {
+      setPanelSendLoading(false);
+    }
   }
 
   // Auto-poll stats while delivery is in progress.
-  // Stops when sent + failed reaches the target, or when the panel closes.
+  // Stops when sent + failed reaches the target, then refreshes announcement to get final status.
   useEffect(() => {
     if (panel?.status !== 'queued') return;
     const announcementId = panel.id;
@@ -118,6 +141,9 @@ export default function AnnouncementsPage() {
         setPanelStats(stats);
         if (stats.target_count > 0 && stats.sent_count + stats.failed_count >= stats.target_count) {
           clearInterval(intervalId);
+          const updated = await apiGetAnnouncement(token, announcementId);
+          setPanel(updated);
+          setList(prev => prev.map(a => a.id === updated.id ? updated : a));
         }
       } catch { /* silently ignore poll errors */ }
     }, 3000);
@@ -202,6 +228,11 @@ export default function AnnouncementsPage() {
   }
 
   const hasStats = panel?.status === 'queued' || panel?.status === 'sent';
+  const deliveryCompleted = panelStats ? panelStats.sent_count + panelStats.failed_count : 0;
+  const deliveryRemaining = panelStats ? Math.max(0, panelStats.target_count - deliveryCompleted) : 0;
+  const deliveryPct = panelStats && panelStats.target_count > 0
+    ? (deliveryCompleted / panelStats.target_count * 100)
+    : 0;
 
   return (
     <>
@@ -294,10 +325,29 @@ export default function AnnouncementsPage() {
                 <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{panel.body}</p>
               </div>
 
+              {panel.status === 'confirmed' && (
+                <div style={{ paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+                  <p style={{ marginBottom: 12 }}>Ready to send</p>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={handlePanelSend}
+                    disabled={panelSendLoading}
+                  >
+                    {panelSendLoading ? 'Sending…' : 'Send Announcement'}
+                  </button>
+                  {panelSendError && (
+                    <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 8 }}>{panelSendError}</p>
+                  )}
+                </div>
+              )}
+
               {hasStats && (
                 <div style={{ paddingTop: 14, borderTop: '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                    <p style={{ fontWeight: 600 }}>Delivery</p>
+                    <p style={{ fontWeight: 600 }}>
+                      {panel.status === 'sent' ? 'Delivery Complete' : 'Delivery Progress'}
+                    </p>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
@@ -309,12 +359,21 @@ export default function AnnouncementsPage() {
                   </div>
                   {panelStatsError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>{panelStatsError}</p>}
                   {panelStats && (
-                    <div style={{ fontSize: '0.9rem', lineHeight: 2 }}>
-                      <p>Target: {panelStats.target_count.toLocaleString()}</p>
-                      <p>Sent: {panelStats.sent_count.toLocaleString()}</p>
-                      <p>Failed: {panelStats.failed_count.toLocaleString()}</p>
-                      <p>Read: {panelStats.read_count.toLocaleString()}</p>
-                      <p>Acknowledged: {panelStats.acknowledged_count.toLocaleString()}</p>
+                    <div style={{ fontSize: '0.9rem' }}>
+                      <progress
+                        value={deliveryCompleted}
+                        max={panelStats.target_count}
+                        style={{ width: '100%', marginBottom: 12 }}
+                      />
+                      <div style={{ lineHeight: 2 }}>
+                        <p>Target: {panelStats.target_count.toLocaleString()}</p>
+                        <p>Sent: {panelStats.sent_count.toLocaleString()}</p>
+                        <p>Failed: {panelStats.failed_count.toLocaleString()}</p>
+                        <p>Remaining: {deliveryRemaining.toLocaleString()}</p>
+                        <p>Progress: {deliveryPct.toFixed(1)}%</p>
+                        <p>Read: {panelStats.read_count.toLocaleString()}</p>
+                        <p>Acknowledged: {panelStats.acknowledged_count.toLocaleString()}</p>
+                      </div>
                     </div>
                   )}
                 </div>
