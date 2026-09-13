@@ -402,3 +402,14 @@ Use CELERY_BROKER_URL from environment variables.
 Configure task autodiscovery.
 
 Do not change existing delivery logic yet.
+
+### User Prompt
+
+Configure Celery for reliable delivery.
+
+Enable:
+- late acknowledgement
+- reject task on worker loss
+- task time limits
+
+Keep the configuration minimal.

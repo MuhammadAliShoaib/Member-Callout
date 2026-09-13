@@ -41,6 +41,10 @@ AI_PROVIDER = os.environ.get('AI_PROVIDER', 'fake')
 AI_API_KEY = os.environ.get('AI_API_KEY', '')
 
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_TIME_LIMIT = 300
+CELERY_TASK_SOFT_TIME_LIMIT = 240
 
 
 # Application definition
