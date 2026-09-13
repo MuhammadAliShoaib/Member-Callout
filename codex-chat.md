@@ -444,3 +444,17 @@ Requirements:
 - pass IDs only, never Django objects
 
 Do not implement retries yet.
+
+### User Prompt
+
+Add database-backed recipient claiming.
+
+Before delivery:
+- atomically claim a pending recipient
+- set claimed_at
+- set claimed_by
+- prevent another worker from claiming it
+
+Use PostgreSQL locking/atomic updates.
+
+Do not hold a DB transaction during the external push call.
