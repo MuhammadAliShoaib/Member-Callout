@@ -40,7 +40,14 @@ CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
 AI_PROVIDER = os.environ.get('AI_PROVIDER', 'fake')
-AI_API_KEY = os.environ.get('AI_API_KEY', '')
+LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o-mini')
+LLM_API_ENDPOINT = os.environ.get('LLM_API_ENDPOINT', 'https://api.openai.com/v1/chat/completions')
+LLM_MAX_TOKENS = int(os.environ.get('LLM_MAX_TOKENS', '1000'))
+LLM_TEMPERATURE = float(os.environ.get('LLM_TEMPERATURE', '0.4'))
+LLM_MAX_RETRIES = int(os.environ.get('LLM_MAX_RETRIES', '3'))
+LLM_RETRY_BASE_DELAY_MS = int(os.environ.get('LLM_RETRY_BASE_DELAY_MS', '1000'))
+LLM_TIMEOUT_MS = int(os.environ.get('LLM_TIMEOUT_MS', '30000'))
 
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 CELERY_TASK_ACKS_LATE = True

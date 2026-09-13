@@ -1,3 +1,4 @@
+import urllib.error
 from datetime import timedelta
 from io import StringIO
 from types import SimpleNamespace
@@ -7,18 +8,35 @@ from uuid import uuid4
 from django.core.management import call_command
 from django.db.models import F
 from django.test import SimpleTestCase, TestCase
+from django.urls import reverse
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
 
 from callouts.ai import (
+    AIConfigurationError,
     AIInvalidResponseError,
     AIProviderError,
     AITimeoutError,
     FakeAnnouncementDraftAI,
+    ProviderAnnouncementDraftAI,
     validate_draft_response,
 )
 from callouts.models import Announcement, AnnouncementRecipient, Local, Member
 from callouts.models import AnnouncementStats
 from callouts.permissions import IsActiveLeaderInOwnLocal
+from callouts.services.llm_service import (
+    SYSTEM_INSTRUCTION,
+    LLMConfigurationError,
+    LLMInvalidResponseError,
+    LLMProviderError,
+    LLMTimeoutError,
+    chat_completion,
+    chat_completion_payload,
+    is_transient_http_status,
+    llm_config,
+    parse_chat_completion_text,
+    regenerate_announcement_text,
+)
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
     TemporaryDeliveryError,
@@ -35,6 +53,8 @@ from callouts.tasks import (
 )
 from callouts.views import (
     AUDIENCE_QUERY_CHUNK_SIZE,
+    AI_REGENERATE_INSTRUCTION_MAX_LENGTH,
+    AI_REGENERATE_TEXT_MAX_LENGTH,
     MAX_ANNOUNCEMENT_RECIPIENTS,
     RECIPIENT_BULK_CREATE_BATCH_SIZE,
     announcement_audience_count,
@@ -177,9 +197,293 @@ class AnnouncementDraftTests(SimpleTestCase):
             })
 
     def test_ai_errors_have_safe_status_codes(self):
+        self.assertEqual(AIConfigurationError.status_code, 503)
         self.assertEqual(AITimeoutError.status_code, 504)
         self.assertEqual(AIProviderError.status_code, 502)
         self.assertEqual(AIInvalidResponseError.status_code, 502)
+
+    def test_provider_ai_uses_llm_service_output_for_existing_draft_contract(self):
+        with patch(
+            'callouts.ai.regenerate_announcement_text',
+            return_value='Meeting starts at 7 PM. Please arrive early.',
+        ):
+            draft = ProviderAnnouncementDraftAI().draft('meeting note')
+
+        self.assertEqual(draft['title'], 'Meeting starts at 7 PM')
+        self.assertEqual(draft['body'], 'Meeting starts at 7 PM. Please arrive early.')
+        self.assertEqual(draft['push_preview'], 'Meeting starts at 7 PM. Please arrive early.')
+
+
+class LLMServiceTests(SimpleTestCase):
+    def test_provider_config_requires_llm_settings_when_used(self):
+        with self.settings(LLM_API_KEY='', LLM_MODEL='gpt-4o-mini', LLM_API_ENDPOINT='https://llm.example/chat'):
+            with self.assertRaises(LLMConfigurationError):
+                llm_config()
+
+    def test_llm_config_uses_provider_agnostic_settings(self):
+        with self.settings(
+            LLM_API_KEY='secret-key',
+            LLM_MODEL='custom-model',
+            LLM_API_ENDPOINT='https://llm.example/chat',
+            LLM_MAX_TOKENS=321,
+            LLM_TEMPERATURE=0.2,
+            LLM_MAX_RETRIES=0,
+            LLM_RETRY_BASE_DELAY_MS=250,
+            LLM_TIMEOUT_MS=5000,
+        ):
+            config = llm_config()
+
+        self.assertEqual(config['api_key'], 'secret-key')
+        self.assertEqual(config['model'], 'custom-model')
+        self.assertEqual(config['api_endpoint'], 'https://llm.example/chat')
+        self.assertEqual(config['max_retries'], 1)
+
+    def test_chat_payload_includes_text_and_optional_instruction_without_api_key(self):
+        config = {'model': 'custom-model', 'max_tokens': 321, 'temperature': 0.2}
+
+        payload = chat_completion_payload(
+            'Picnic is Saturday at noon.',
+            'Make it more professional.',
+            config,
+        )
+
+        self.assertEqual(payload['model'], 'custom-model')
+        self.assertEqual(payload['max_tokens'], 321)
+        self.assertEqual(payload['temperature'], 0.2)
+        self.assertEqual(payload['messages'][0]['content'], SYSTEM_INSTRUCTION)
+        self.assertIn('Picnic is Saturday at noon.', payload['messages'][-1]['content'])
+        self.assertIn('Make it more professional.', payload['messages'][-1]['content'])
+        self.assertNotIn('api_key', payload)
+        self.assertNotIn('secret-key', str(payload))
+
+    def test_regenerate_announcement_text_returns_generated_text_only(self):
+        response = {
+            'choices': [
+                {
+                    'message': {
+                        'content': 'Please join us Saturday at noon.',
+                    },
+                },
+            ],
+        }
+
+        with self.settings(
+            LLM_API_KEY='secret-key',
+            LLM_MODEL='custom-model',
+            LLM_API_ENDPOINT='https://llm.example/chat',
+        ):
+            with patch('callouts.services.llm_service.chat_completion', return_value=response):
+                result = regenerate_announcement_text('Join Saturday.', 'Make it warmer.')
+
+        self.assertEqual(result, 'Please join us Saturday at noon.')
+
+    def test_parse_chat_completion_rejects_invalid_text(self):
+        with self.assertRaises(LLMInvalidResponseError):
+            parse_chat_completion_text({'choices': [{'message': {'content': '   '}}]})
+
+    def test_transient_status_classification(self):
+        self.assertTrue(is_transient_http_status(429))
+        self.assertTrue(is_transient_http_status(500))
+        self.assertTrue(is_transient_http_status(503))
+        self.assertFalse(is_transient_http_status(400))
+        self.assertFalse(is_transient_http_status(401))
+        self.assertFalse(is_transient_http_status(403))
+
+    def test_http_validation_and_auth_errors_are_not_retried(self):
+        config = {
+            'api_key': 'secret-key',
+            'model': 'custom-model',
+            'api_endpoint': 'https://llm.example/chat',
+            'max_tokens': 321,
+            'temperature': 0.2,
+            'max_retries': 3,
+            'retry_base_delay_ms': 250,
+            'timeout_ms': 5000,
+        }
+        error = urllib.error.HTTPError('https://llm.example/chat', 401, 'Unauthorized', {}, None)
+
+        with patch('urllib.request.urlopen', side_effect=error) as urlopen:
+            with self.assertRaises(LLMProviderError):
+                chat_completion({'messages': []}, config)
+
+        urlopen.assert_called_once()
+
+    def test_transient_http_errors_are_retried_then_raise_provider_error(self):
+        config = {
+            'api_key': 'secret-key',
+            'model': 'custom-model',
+            'api_endpoint': 'https://llm.example/chat',
+            'max_tokens': 321,
+            'temperature': 0.2,
+            'max_retries': 3,
+            'retry_base_delay_ms': 250,
+            'timeout_ms': 5000,
+        }
+        error = urllib.error.HTTPError('https://llm.example/chat', 503, 'Unavailable', {}, None)
+
+        with patch('urllib.request.urlopen', side_effect=error) as urlopen:
+            with patch('callouts.services.llm_service.time.sleep') as sleep:
+                with self.assertRaises(LLMProviderError):
+                    chat_completion({'messages': []}, config)
+
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_connection_errors_are_retried_then_raise_timeout_error(self):
+        config = {
+            'api_key': 'secret-key',
+            'model': 'custom-model',
+            'api_endpoint': 'https://llm.example/chat',
+            'max_tokens': 321,
+            'temperature': 0.2,
+            'max_retries': 2,
+            'retry_base_delay_ms': 250,
+            'timeout_ms': 5000,
+        }
+
+        with patch('urllib.request.urlopen', side_effect=urllib.error.URLError('temporary')) as urlopen:
+            with patch('callouts.services.llm_service.time.sleep') as sleep:
+                with self.assertRaises(LLMTimeoutError):
+                    chat_completion({'messages': []}, config)
+
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+
+
+class AnnouncementAIRegenerateEndpointTests(TestCase):
+    def setUp(self):
+        self.local = Local.objects.create(name='Local 27')
+        self.leader = self.member('leader@example.com', Member.Role.LEADER)
+        self.member_user = self.member('member@example.com', Member.Role.MEMBER)
+        self.url = reverse('announcement-ai-regenerate')
+
+    def test_requires_authenticated_user(self):
+        response = self.client.post(
+            self.url,
+            {'text': 'Meeting tomorrow at 6 PM.'},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_requires_active_leader_permissions(self):
+        self.authenticate(self.member_user)
+
+        response = self.client.post(
+            self.url,
+            {'text': 'Meeting tomorrow at 6 PM.'},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_returns_generated_text_without_saving_or_sending(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            return_value="Please attend tomorrow's meeting at 6 PM.",
+        ) as regenerate:
+            response = self.client.post(
+                self.url,
+                {
+                    'text': 'Meeting tomorrow at 6 PM.',
+                    'instruction': 'Make this more professional',
+                },
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {'generated_text': "Please attend tomorrow's meeting at 6 PM."},
+        )
+        regenerate.assert_called_once_with(
+            'Meeting tomorrow at 6 PM.',
+            'Make this more professional',
+        )
+        self.assertEqual(Announcement.objects.count(), 0)
+        self.assertEqual(AnnouncementRecipient.objects.count(), 0)
+
+    def test_instruction_is_optional(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            return_value='Meeting tomorrow at 6 PM.',
+        ) as regenerate:
+            response = self.client.post(
+                self.url,
+                {'text': '  Meeting tomorrow at 6 PM.  '},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        regenerate.assert_called_once_with('Meeting tomorrow at 6 PM.', None)
+
+    def test_validates_required_text(self):
+        self.authenticate(self.leader)
+
+        with patch('callouts.views.regenerate_announcement_text') as regenerate:
+            response = self.client.post(
+                self.url,
+                {'text': '   '},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {'text': 'Text is required.'})
+        regenerate.assert_not_called()
+
+    def test_validates_text_and_instruction_length(self):
+        self.authenticate(self.leader)
+
+        with patch('callouts.views.regenerate_announcement_text') as regenerate:
+            response = self.client.post(
+                self.url,
+                {
+                    'text': 'x' * (AI_REGENERATE_TEXT_MAX_LENGTH + 1),
+                    'instruction': 'x' * (AI_REGENERATE_INSTRUCTION_MAX_LENGTH + 1),
+                },
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('text', response.json())
+        self.assertIn('instruction', response.json())
+        regenerate.assert_not_called()
+
+    def test_returns_safe_service_error(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            side_effect=LLMProviderError(),
+        ):
+            response = self.client.post(
+                self.url,
+                {'text': 'Meeting tomorrow at 6 PM.'},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json(), {'detail': LLMProviderError.detail})
+
+    def member(self, email, role):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=self.local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def authenticate(self, user):
+        token, _ = Token.objects.get_or_create(user=user)
+        self.client.defaults['HTTP_AUTHORIZATION'] = f'Token {token.key}'
 
 
 class AnnouncementConfirmationTests(SimpleTestCase):

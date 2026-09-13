@@ -16,12 +16,22 @@ from callouts.ai import AIError, get_announcement_draft_ai
 from callouts.models import Announcement, AnnouncementRecipient, AnnouncementStats, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
+from callouts.services.llm_service import (
+    LLMConfigurationError,
+    LLMInvalidResponseError,
+    LLMProviderError,
+    LLMServiceError,
+    LLMTimeoutError,
+    regenerate_announcement_text,
+)
 from callouts.tasks import deliver_recipient_batch, recipient_batch_size
 from callouts.tenant import for_request_local
 
 MAX_ANNOUNCEMENT_RECIPIENTS = 22400
 RECIPIENT_BULK_CREATE_BATCH_SIZE = 500
 AUDIENCE_QUERY_CHUNK_SIZE = 1000
+AI_REGENERATE_TEXT_MAX_LENGTH = 5000
+AI_REGENERATE_INSTRUCTION_MAX_LENGTH = 500
 
 
 def announcement_content_hash(announcement):
@@ -385,6 +395,53 @@ def announcement_ai_draft(request):
         )
 
     return Response(draft)
+
+
+@api_view(['POST'])
+@permission_classes([IsActiveLeaderInOwnLocal])
+def announcement_ai_regenerate(request):
+    text = request.data.get('text')
+    instruction = request.data.get('instruction')
+    errors = {}
+
+    if not isinstance(text, str) or not text.strip():
+        errors['text'] = 'Text is required.'
+    elif len(text) > AI_REGENERATE_TEXT_MAX_LENGTH:
+        errors['text'] = f'Text must be {AI_REGENERATE_TEXT_MAX_LENGTH} characters or fewer.'
+
+    if instruction is not None:
+        if not isinstance(instruction, str):
+            errors['instruction'] = 'Instruction must be text.'
+        elif len(instruction) > AI_REGENERATE_INSTRUCTION_MAX_LENGTH:
+            errors['instruction'] = (
+                f'Instruction must be {AI_REGENERATE_INSTRUCTION_MAX_LENGTH} characters or fewer.'
+            )
+
+    if errors:
+        return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+
+    normalized_text = text.strip()
+    normalized_instruction = instruction.strip() if isinstance(instruction, str) and instruction.strip() else None
+
+    try:
+        generated_text = regenerate_announcement_text(normalized_text, normalized_instruction)
+    except LLMServiceError as exc:
+        return Response(
+            {'detail': exc.detail},
+            status=llm_error_status(exc),
+        )
+
+    return Response({'generated_text': generated_text})
+
+
+def llm_error_status(error):
+    if isinstance(error, LLMConfigurationError):
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    if isinstance(error, LLMTimeoutError):
+        return status.HTTP_504_GATEWAY_TIMEOUT
+    if isinstance(error, (LLMProviderError, LLMInvalidResponseError)):
+        return status.HTTP_502_BAD_GATEWAY
+    return status.HTTP_502_BAD_GATEWAY
 
 
 @api_view(['GET', 'PATCH'])

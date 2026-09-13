@@ -725,3 +725,36 @@ Measure:
 
 Do not optimize blindly.
 Report bottlenecks first.
+
+### User Prompt
+
+We are extending the existing Member Callout Django backend.
+
+Add provider-agnostic LLM configuration for AI-assisted announcement text regeneration.
+
+Add these environment variables:
+
+LLM_API_KEY=
+LLM_MODEL=gpt-4o-mini
+LLM_API_ENDPOINT=https://api.openai.com/v1/chat/completions
+
+LLM_MAX_TOKENS=1000
+LLM_TEMPERATURE=0.4
+LLM_MAX_RETRIES=3
+LLM_RETRY_BASE_DELAY_MS=1000
+LLM_TIMEOUT_MS=30000
+
+Requirements:
+
+1. Read all configuration through Django settings/environment variables.
+2. Never hardcode API keys.
+3. Never expose LLM_API_KEY through API responses or frontend configuration.
+4. Validate required LLM configuration when the AI feature is used.
+5. Keep the implementation provider-agnostic so any OpenAI-compatible provider can be used by changing:
+   - LLM_API_KEY
+   - LLM_MODEL
+   - LLM_API_ENDPOINT
+6. Do not change the existing announcement delivery/Celery architecture.
+7. Do not give the LLM direct database access.
+
+Update .env.example with safe placeholder values.

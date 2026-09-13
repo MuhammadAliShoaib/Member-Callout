@@ -2,7 +2,15 @@ import re
 from abc import ABC, abstractmethod
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+
+from callouts.services.llm_service import (
+    LLMConfigurationError,
+    LLMInvalidResponseError,
+    LLMProviderError,
+    LLMServiceError,
+    LLMTimeoutError,
+    regenerate_announcement_text,
+)
 
 
 def truncate_text(value, max_length):
@@ -30,6 +38,11 @@ class AITimeoutError(AIError):
 
 class AIProviderError(AIError):
     detail = 'AI provider failed.'
+
+
+class AIConfigurationError(AIError):
+    detail = 'AI provider is not configured.'
+    status_code = 503
 
 
 class AIInvalidResponseError(AIError):
@@ -69,13 +82,34 @@ class FakeAnnouncementDraftAI(AnnouncementDraftAI):
 
 
 class ProviderAnnouncementDraftAI(AnnouncementDraftAI):
-    def __init__(self, api_key=None):
-        self.api_key = api_key or settings.AI_API_KEY
-        if not self.api_key:
-            raise ImproperlyConfigured('AI_API_KEY is required when AI_PROVIDER=provider.')
-
     def draft(self, note):
-        raise AIProviderError()
+        try:
+            body = regenerate_announcement_text(note)
+        except LLMServiceError as exc:
+            raise ai_error_from_llm_error(exc) from exc
+
+        return validate_draft_response({
+            'title': truncate_text(title_from_text(body), 80),
+            'body': body,
+            'push_preview': truncate_text(body, 120),
+        })
+
+
+def title_from_text(text):
+    normalized = re.sub(r'\s+', ' ', text).strip()
+    return re.split(r'[.!?]', normalized, maxsplit=1)[0].strip() or 'Announcement'
+
+
+def ai_error_from_llm_error(error):
+    if isinstance(error, LLMConfigurationError):
+        return AIConfigurationError()
+    if isinstance(error, LLMTimeoutError):
+        return AITimeoutError()
+    if isinstance(error, LLMInvalidResponseError):
+        return AIInvalidResponseError()
+    if isinstance(error, LLMProviderError):
+        return AIProviderError()
+    return AIProviderError()
 
 
 def get_announcement_draft_ai():
