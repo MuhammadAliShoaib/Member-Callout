@@ -64,6 +64,20 @@ class Member(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['full_name', 'local', 'classification']
 
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=['local', 'id'],
+                name='member_active_local_id_idx',
+                condition=models.Q(status='active', is_active=True),
+            ),
+            models.Index(
+                fields=['local', 'classification', 'id'],
+                name='member_active_local_class_idx',
+                condition=models.Q(status='active', is_active=True),
+            ),
+        ]
+
     def clean(self):
         super().clean()
         self.email = type(self).objects.normalize_email(self.email)

@@ -534,3 +534,18 @@ Requirements:
 - select only required fields
 - never load all local members into Python
 
+### User Prompt
+
+Review Member indexes for audience selection.
+
+Main query filters:
+- local_id
+- status
+- classification
+
+A local may contain 187,000 members.
+
+Add appropriate PostgreSQL indexes.
+Avoid redundant indexes.
+
+Explain the chosen indexes.
