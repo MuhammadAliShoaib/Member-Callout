@@ -22,6 +22,7 @@ from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
     TemporaryDeliveryError,
+    claim_pending_recipients,
     deliver_recipient_batch,
     mark_temporary_delivery_failure,
     mark_terminal_delivery_failure,
@@ -887,6 +888,88 @@ class DeliveryTaskDatabaseTests(TestCase):
         self.assertIsNone(recipient.claimed_at)
         self.assertIsNone(recipient.claimed_by)
         self.assertEqual(stats.sent_count, 1)
+
+    def test_multiple_workers_claim_each_recipient_once(self):
+        local, announcement, stats = self.delivery_setup(target_count=2)
+        first = self.recipient(announcement, self.member(local, 'first@example.com'))
+        second = self.recipient(announcement, self.member(local, 'second@example.com'))
+        recipient_ids = [str(first.id), str(second.id)]
+
+        first_claim = claim_pending_recipients(recipient_ids, 'worker-1')
+        second_claim = claim_pending_recipients(recipient_ids, 'worker-2')
+
+        self.assertEqual(set(first_claim), {first.id, second.id})
+        self.assertEqual(second_claim, [])
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.claimed_by, 'worker-1')
+        self.assertEqual(second.claimed_by, 'worker-1')
+        self.assertEqual(first.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(second.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+
+    def test_overlapping_worker_batches_do_not_duplicate_processing_or_stats(self):
+        local, announcement, stats = self.delivery_setup(target_count=4)
+        recipients = [
+            self.recipient(announcement, self.member(local, f'member-{number}@example.com'))
+            for number in range(4)
+        ]
+        first_batch = [str(recipients[0].id), str(recipients[1].id), str(recipients[2].id)]
+        second_batch = [str(recipients[1].id), str(recipients[2].id), str(recipients[3].id)]
+
+        with patch('callouts.tasks.fake_push_delivery') as fake_push_delivery:
+            first_result = deliver_recipient_batch.run(first_batch)
+            second_result = deliver_recipient_batch.run(second_batch)
+
+        self.assertEqual(fake_push_delivery.call_count, 4)
+        self.assertEqual(first_result['processed'], 3)
+        self.assertEqual(second_result['processed'], 1)
+
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(stats.sent_count, 4)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
+
+        for recipient in recipients:
+            recipient.refresh_from_db()
+            self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+            self.assertEqual(recipient.attempt_count, 0)
+
+    def test_overlapping_retry_tasks_remain_safe(self):
+        local, announcement, stats = self.delivery_setup(target_count=1)
+        recipient = self.recipient(announcement, self.member(local, 'member@example.com'))
+        recipient_id = str(recipient.id)
+
+        with patch('callouts.tasks.fake_push_delivery', side_effect=TemporaryDeliveryError('try again')):
+            with patch.object(deliver_recipient_batch, 'apply_async') as apply_async:
+                first_result = deliver_recipient_batch.run([recipient_id])
+                second_result = deliver_recipient_batch.run([recipient_id])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(first_result['temporary_failures'], 1)
+        self.assertEqual(second_result['temporary_failures'], 1)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.PENDING)
+        self.assertEqual(recipient.attempt_count, 2)
+        self.assertEqual(stats.sent_count, 0)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.QUEUED)
+        self.assertEqual(apply_async.call_count, 2)
+
+        with patch('callouts.tasks.fake_push_delivery'):
+            retry_result = deliver_recipient_batch.run([recipient_id])
+
+        recipient.refresh_from_db()
+        stats.refresh_from_db()
+        announcement.refresh_from_db()
+        self.assertEqual(retry_result['processed'], 1)
+        self.assertEqual(recipient.delivery_status, AnnouncementRecipient.DeliveryStatus.SENT)
+        self.assertEqual(recipient.attempt_count, 2)
+        self.assertEqual(stats.sent_count, 1)
+        self.assertEqual(stats.failed_count, 0)
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
 
     def delivery_setup(self, target_count=0, sent_count=0, failed_count=0):
         local = Local.objects.create(name='Local 27')

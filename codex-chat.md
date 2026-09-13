@@ -699,3 +699,15 @@ Start with:
 celery -A config worker --loglevel=info
 
 Wait for healthy PostgreSQL and Redis.
+
+### User Prompt
+
+Test delivery with multiple Celery workers.
+
+Simulate concurrent processing of the same announcement.
+
+Verify:
+- recipients are safely claimed
+- no duplicate recipient processing
+- retries remain safe
+- stats remain correct
