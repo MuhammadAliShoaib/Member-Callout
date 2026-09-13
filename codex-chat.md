@@ -376,3 +376,9 @@ Bulk-create AnnouncementRecipient rows for the audience.
 Use the UNIQUE(announcement, member) constraint.
 
 Duplicate/retried audience expansion must not create duplicate recipients.
+
+### User Prompt
+
+Create/update AnnouncementStats after audience expansion.
+
+Set target_count to the number of unique recipients.

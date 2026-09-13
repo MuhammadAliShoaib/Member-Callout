@@ -50,7 +50,9 @@ def update_announcement_target_count(announcement):
         defaults={'local': announcement.local},
     )
     stats.local = announcement.local
-    stats.target_count = announcement_audience_queryset(announcement).count()
+    stats.target_count = AnnouncementRecipient.objects.filter(
+        announcement=announcement,
+    ).values('member_id').distinct().count()
     stats.save(update_fields=['local', 'target_count', 'updated_at'])
     return stats
 
