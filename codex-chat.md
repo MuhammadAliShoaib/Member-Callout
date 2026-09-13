@@ -573,3 +573,15 @@ Requirements:
 - use bounded batch sizes
 
 Maximum target audience is 22,400.
+
+### User Prompt
+
+Make audience expansion idempotent.
+
+Requirements:
+- keep UNIQUE(announcement, member)
+- use bulk_create(ignore_conflicts=True)
+- repeated send requests must not duplicate recipients
+- only members from the announcement's local may be inserted
+
+Add tests.

@@ -2,7 +2,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from callouts.ai import (
@@ -12,7 +12,7 @@ from callouts.ai import (
     FakeAnnouncementDraftAI,
     validate_draft_response,
 )
-from callouts.models import Announcement, Local, Member
+from callouts.models import Announcement, AnnouncementRecipient, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
@@ -35,6 +35,7 @@ from callouts.views import (
     announcement_content_hash,
     announcement_content_is_confirmed,
     announcement_recipient_for_member,
+    bulk_create_announcement_recipients,
     create_announcement_recipients_for_send,
     expand_announcement_audience,
     validate_announcement_audience_size,
@@ -355,6 +356,87 @@ class AnnouncementAudienceTests(SimpleTestCase):
         second_batch = bulk_create_announcement_recipients.call_args_list[1].args[0]
         self.assertEqual(len(first_batch), RECIPIENT_BULK_CREATE_BATCH_SIZE)
         self.assertEqual(len(second_batch), 1)
+
+    @patch('callouts.views.AnnouncementRecipient.objects')
+    def test_bulk_create_recipients_ignores_unique_conflicts(self, recipient_manager):
+        bulk_create_announcement_recipients(['recipient'])
+
+        recipient_manager.bulk_create.assert_called_once_with(
+            ['recipient'],
+            batch_size=RECIPIENT_BULK_CREATE_BATCH_SIZE,
+            ignore_conflicts=True,
+        )
+
+
+class AnnouncementAudienceExpansionDatabaseTests(TestCase):
+    def test_repeated_audience_expansion_does_not_duplicate_recipients(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        member = self.member(local, 'member@example.com')
+        announcement = self.announcement(local, leader)
+
+        expand_announcement_audience(announcement)
+        expand_announcement_audience(announcement)
+
+        recipients = AnnouncementRecipient.objects.filter(announcement=announcement)
+        self.assertEqual(recipients.count(), 2)
+        self.assertEqual(
+            set(recipients.values_list('member_id', flat=True)),
+            {leader.id, member.id},
+        )
+
+    def test_audience_expansion_only_inserts_members_from_announcement_local(self):
+        local_27 = Local.objects.create(name='Local 27')
+        local_99 = Local.objects.create(name='Local 99')
+        leader = self.member(local_27, 'leader@example.com', role=Member.Role.LEADER)
+        same_local_member = self.member(local_27, 'same-local@example.com')
+        other_local_member = self.member(local_99, 'other-local@example.com')
+        announcement = self.announcement(local_27, leader)
+
+        expand_announcement_audience(announcement)
+
+        recipients = AnnouncementRecipient.objects.filter(announcement=announcement)
+        self.assertEqual(recipients.count(), 2)
+        self.assertIn(
+            same_local_member.id,
+            recipients.values_list('member_id', flat=True),
+        )
+        self.assertNotIn(
+            other_local_member.id,
+            recipients.values_list('member_id', flat=True),
+        )
+        self.assertFalse(recipients.exclude(local=local_27).exists())
+
+    def test_member_can_only_be_inserted_once_per_announcement(self):
+        constraint_names = {
+            constraint.name
+            for constraint in AnnouncementRecipient._meta.constraints
+        }
+
+        self.assertIn('unique_announcement_member', constraint_names)
+
+    def member(self, local, email, role=Member.Role.MEMBER):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def announcement(self, local, created_by):
+        return Announcement.objects.create(
+            local=local,
+            created_by=created_by,
+            title='Meeting',
+            body='Meeting tonight.',
+            push_preview='Meeting tonight.',
+            status=Announcement.Status.CONFIRMED,
+            confirmed_content_hash='confirmed',
+        )
 
 
 class DeliveryTaskTests(SimpleTestCase):
