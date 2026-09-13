@@ -24,11 +24,16 @@ from callouts.ai import (
 from callouts.models import Announcement, AnnouncementRecipient, Local, Member
 from callouts.models import AnnouncementStats
 from callouts.permissions import IsActiveLeaderInOwnLocal
+from callouts.serializers import AnnouncementSerializer
 from callouts.services.llm_service import (
     SYSTEM_INSTRUCTION,
+    LLMAuthenticationError,
     LLMConfigurationError,
     LLMInvalidResponseError,
+    LLMNetworkError,
     LLMProviderError,
+    LLMProviderUnavailableError,
+    LLMRateLimitError,
     LLMTimeoutError,
     chat_completion,
     chat_completion_payload,
@@ -303,7 +308,7 @@ class LLMServiceTests(SimpleTestCase):
         error = urllib.error.HTTPError('https://llm.example/chat', 401, 'Unauthorized', {}, None)
 
         with patch('urllib.request.urlopen', side_effect=error) as urlopen:
-            with self.assertRaises(LLMProviderError):
+            with self.assertRaises(LLMAuthenticationError):
                 chat_completion({'messages': []}, config)
 
         urlopen.assert_called_once()
@@ -323,13 +328,13 @@ class LLMServiceTests(SimpleTestCase):
 
         with patch('urllib.request.urlopen', side_effect=error) as urlopen:
             with patch('callouts.services.llm_service.time.sleep') as sleep:
-                with self.assertRaises(LLMProviderError):
+                with self.assertRaises(LLMProviderUnavailableError):
                     chat_completion({'messages': []}, config)
 
         self.assertEqual(urlopen.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
 
-    def test_connection_errors_are_retried_then_raise_timeout_error(self):
+    def test_connection_errors_are_retried_then_raise_network_error(self):
         config = {
             'api_key': 'secret-key',
             'model': 'custom-model',
@@ -343,7 +348,7 @@ class LLMServiceTests(SimpleTestCase):
 
         with patch('urllib.request.urlopen', side_effect=urllib.error.URLError('temporary')) as urlopen:
             with patch('callouts.services.llm_service.time.sleep') as sleep:
-                with self.assertRaises(LLMTimeoutError):
+                with self.assertRaises(LLMNetworkError):
                     chat_completion({'messages': []}, config)
 
         self.assertEqual(urlopen.call_count, 2)
@@ -353,6 +358,7 @@ class LLMServiceTests(SimpleTestCase):
 class AnnouncementAIRegenerateEndpointTests(TestCase):
     def setUp(self):
         self.local = Local.objects.create(name='Local 27')
+        self.other_local = Local.objects.create(name='Local 99')
         self.leader = self.member('leader@example.com', Member.Role.LEADER)
         self.member_user = self.member('member@example.com', Member.Role.MEMBER)
         self.url = reverse('announcement-ai-regenerate')
@@ -377,21 +383,44 @@ class AnnouncementAIRegenerateEndpointTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_returns_generated_text_without_saving_or_sending(self):
-        self.authenticate(self.leader)
+    def test_non_leader_cannot_spoof_another_local_privilege(self):
+        self.authenticate(self.member_user)
+        other_local_leader = self.member(
+            'other-leader@example.com',
+            Member.Role.LEADER,
+            local=self.other_local,
+        )
 
-        with patch(
-            'callouts.views.regenerate_announcement_text',
-            return_value="Please attend tomorrow's meeting at 6 PM.",
-        ) as regenerate:
+        with patch('callouts.views.regenerate_announcement_text') as regenerate:
             response = self.client.post(
                 self.url,
                 {
                     'text': 'Meeting tomorrow at 6 PM.',
-                    'instruction': 'Make this more professional',
+                    'local_id': str(self.other_local.id),
+                    'created_by': str(other_local_leader.id),
                 },
                 content_type='application/json',
             )
+
+        self.assertEqual(response.status_code, 403)
+        regenerate.assert_not_called()
+
+    def test_returns_generated_text_without_saving_or_sending(self):
+        self.authenticate(self.leader)
+
+        with patch('callouts.views.deliver_recipient_batch.apply_async') as apply_async:
+            with patch(
+                'callouts.views.regenerate_announcement_text',
+                return_value="Please attend tomorrow's meeting at 6 PM.",
+            ) as regenerate:
+                response = self.client.post(
+                    self.url,
+                    {
+                        'text': 'Meeting tomorrow at 6 PM.',
+                        'instruction': 'Make this more professional',
+                    },
+                    content_type='application/json',
+                )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -404,6 +433,64 @@ class AnnouncementAIRegenerateEndpointTests(TestCase):
         )
         self.assertEqual(Announcement.objects.count(), 0)
         self.assertEqual(AnnouncementRecipient.objects.count(), 0)
+        apply_async.assert_not_called()
+
+    def test_regenerate_does_not_update_existing_announcement(self):
+        self.authenticate(self.leader)
+        announcement = self.announcement()
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            return_value='New generated body.',
+        ):
+            response = self.client.post(
+                self.url,
+                {
+                    'announcement_id': str(announcement.id),
+                    'text': announcement.body,
+                },
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        announcement.refresh_from_db()
+        self.assertEqual(announcement.title, 'Original title')
+        self.assertEqual(announcement.body, 'Original body.')
+        self.assertEqual(announcement.push_preview, 'Original preview.')
+
+    def test_late_response_cannot_modify_announcement_text(self):
+        self.authenticate(self.leader)
+        announcement = self.announcement()
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            side_effect=['Stale generated body.', 'Fresh generated body.'],
+        ):
+            stale_response = self.client.post(
+                self.url,
+                {
+                    'announcement_id': str(announcement.id),
+                    'text': announcement.body,
+                    'client_request_id': 'older-request',
+                },
+                content_type='application/json',
+            )
+            fresh_response = self.client.post(
+                self.url,
+                {
+                    'announcement_id': str(announcement.id),
+                    'text': announcement.body,
+                    'client_request_id': 'newer-request',
+                },
+                content_type='application/json',
+            )
+
+        self.assertEqual(stale_response.status_code, 200)
+        self.assertEqual(fresh_response.status_code, 200)
+        self.assertEqual(stale_response.json()['client_request_id'], 'older-request')
+        self.assertEqual(fresh_response.json()['client_request_id'], 'newer-request')
+        announcement.refresh_from_db()
+        self.assertEqual(announcement.body, 'Original body.')
 
     def test_echoes_client_request_id(self):
         self.authenticate(self.leader)
@@ -488,7 +575,174 @@ class AnnouncementAIRegenerateEndpointTests(TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json(), {'detail': LLMProviderError.detail})
 
-    def member(self, email, role):
+    def test_llm_timeout_is_handled(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            side_effect=LLMTimeoutError(),
+        ):
+            response = self.client.post(
+                self.url,
+                {'text': 'Meeting tomorrow at 6 PM.'},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.json(), {'detail': LLMTimeoutError.detail})
+
+    def test_llm_rate_limit_is_handled(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            side_effect=LLMRateLimitError(),
+        ):
+            response = self.client.post(
+                self.url,
+                {'text': 'Meeting tomorrow at 6 PM.'},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {'detail': LLMRateLimitError.detail})
+
+    def test_llm_5xx_failure_is_handled(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            side_effect=LLMProviderUnavailableError(),
+        ):
+            response = self.client.post(
+                self.url,
+                {'text': 'Meeting tomorrow at 6 PM.'},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {'detail': LLMProviderUnavailableError.detail})
+
+    def test_invalid_provider_response_is_handled(self):
+        self.authenticate(self.leader)
+
+        with patch(
+            'callouts.views.regenerate_announcement_text',
+            side_effect=LLMInvalidResponseError(),
+        ):
+            response = self.client.post(
+                self.url,
+                {'text': 'Meeting tomorrow at 6 PM.'},
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json(), {'detail': LLMInvalidResponseError.detail})
+
+    def test_api_key_is_never_returned(self):
+        self.authenticate(self.leader)
+
+        with self.settings(LLM_API_KEY='sk-never-return-this'):
+            with patch(
+                'callouts.views.regenerate_announcement_text',
+                side_effect=LLMProviderError(),
+            ):
+                response = self.client.post(
+                    self.url,
+                    {'text': 'Meeting tomorrow at 6 PM.'},
+                    content_type='application/json',
+                )
+
+        self.assertNotIn('sk-never-return-this', response.content.decode('utf-8'))
+
+    def announcement(self):
+        return Announcement.objects.create(
+            local=self.local,
+            created_by=self.leader,
+            title='Original title',
+            body='Original body.',
+            push_preview='Original preview.',
+            status=Announcement.Status.DRAFT,
+        )
+
+    def member(self, email, role, local=None):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=local or self.local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def authenticate(self, user):
+        token, _ = Token.objects.get_or_create(user=user)
+        self.client.defaults['HTTP_AUTHORIZATION'] = f'Token {token.key}'
+
+
+class AnnouncementEditLifecycleEndpointTests(TestCase):
+    def setUp(self):
+        self.local = Local.objects.create(name='Local 27')
+        self.leader = self.member('leader@example.com')
+        self.authenticate(self.leader)
+
+    def test_serializer_exposes_content_editable_from_backend_lifecycle(self):
+        draft = self.announcement(Announcement.Status.DRAFT)
+        confirmed = self.announcement(Announcement.Status.CONFIRMED)
+        queued = self.announcement(Announcement.Status.QUEUED)
+        sent = self.announcement(Announcement.Status.SENT)
+
+        self.assertTrue(AnnouncementSerializer(draft).data['content_editable'])
+        self.assertTrue(AnnouncementSerializer(confirmed).data['content_editable'])
+        self.assertFalse(AnnouncementSerializer(queued).data['content_editable'])
+        self.assertFalse(AnnouncementSerializer(sent).data['content_editable'])
+
+    def test_confirmed_announcement_content_can_still_be_edited_and_returns_to_draft(self):
+        announcement = self.announcement(Announcement.Status.CONFIRMED)
+
+        response = self.client.patch(
+            reverse('announcement-detail', args=[announcement.id]),
+            {'body': 'Updated meeting details.'},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], Announcement.Status.DRAFT)
+        self.assertTrue(response.json()['content_editable'])
+
+    def test_queued_announcement_content_cannot_be_edited(self):
+        announcement = self.announcement(Announcement.Status.QUEUED)
+
+        response = self.client.patch(
+            reverse('announcement-detail', args=[announcement.id]),
+            {'body': 'Updated meeting details.'},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {'detail': 'Announcement content can no longer be edited.'})
+        announcement.refresh_from_db()
+        self.assertEqual(announcement.status, Announcement.Status.QUEUED)
+        self.assertEqual(announcement.body, 'Meeting tonight.')
+
+    def test_sent_announcement_content_cannot_be_edited(self):
+        announcement = self.announcement(Announcement.Status.SENT)
+
+        response = self.client.patch(
+            reverse('announcement-detail', args=[announcement.id]),
+            {'title': 'Updated title'},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {'detail': 'Announcement content can no longer be edited.'})
+        announcement.refresh_from_db()
+        self.assertEqual(announcement.status, Announcement.Status.SENT)
+        self.assertEqual(announcement.title, 'Meeting')
+
+    def member(self, email):
         return Member.objects.create_user(
             email=email,
             password='password',
@@ -496,8 +750,19 @@ class AnnouncementAIRegenerateEndpointTests(TestCase):
             full_name=email,
             classification='journeyman',
             status=Member.Status.ACTIVE,
-            role=role,
+            role=Member.Role.LEADER,
             is_active=True,
+        )
+
+    def announcement(self, status):
+        return Announcement.objects.create(
+            local=self.local,
+            created_by=self.leader,
+            title='Meeting',
+            body='Meeting tonight.',
+            push_preview='Meeting tonight.',
+            status=status,
+            confirmed_content_hash='confirmed',
         )
 
     def authenticate(self, user):

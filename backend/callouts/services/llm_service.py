@@ -1,4 +1,5 @@
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -13,25 +14,59 @@ SYSTEM_INSTRUCTION = (
     'Return only the rewritten announcement text.'
 )
 
+AI_UNAVAILABLE_MESSAGE = 'AI generation is temporarily unavailable.'
+AI_TIMEOUT_MESSAGE = 'AI generation timed out. Please try again.'
+AI_NOT_CONFIGURED_MESSAGE = 'AI generation service is not configured.'
+
 
 class LLMServiceError(Exception):
-    detail = 'LLM generation failed.'
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 502
 
 
 class LLMConfigurationError(LLMServiceError):
-    detail = 'LLM provider is not configured.'
+    detail = AI_NOT_CONFIGURED_MESSAGE
+    status_code = 503
 
 
 class LLMTimeoutError(LLMServiceError):
-    detail = 'LLM generation timed out.'
+    detail = AI_TIMEOUT_MESSAGE
+    status_code = 504
+
+
+class LLMAuthenticationError(LLMServiceError):
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 502
+
+
+class LLMPermissionError(LLMServiceError):
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 502
+
+
+class LLMRateLimitError(LLMServiceError):
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 503
+
+
+class LLMNetworkError(LLMServiceError):
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 503
+
+
+class LLMProviderUnavailableError(LLMServiceError):
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 503
 
 
 class LLMProviderError(LLMServiceError):
-    detail = 'LLM provider failed.'
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 502
 
 
 class LLMInvalidResponseError(LLMServiceError):
-    detail = 'LLM provider returned an invalid response.'
+    detail = AI_UNAVAILABLE_MESSAGE
+    status_code = 502
 
 
 def regenerate_announcement_text(text, instruction=None):
@@ -111,11 +146,13 @@ def chat_completion(payload, config):
                 return json.loads(response.read().decode('utf-8'))
         except urllib.error.HTTPError as exc:
             if not is_transient_http_status(exc.code):
-                raise LLMProviderError() from exc
+                raise llm_error_for_http_status(exc.code) from exc
             last_error = exc
-        except TimeoutError as exc:
+        except (TimeoutError, socket.timeout) as exc:
             last_error = exc
         except urllib.error.URLError as exc:
+            last_error = exc
+        except OSError as exc:
             last_error = exc
         except json.JSONDecodeError as exc:
             raise LLMInvalidResponseError() from exc
@@ -124,13 +161,36 @@ def chat_completion(payload, config):
             time.sleep(retry_delay_seconds(config, attempt))
 
     if isinstance(last_error, urllib.error.HTTPError):
-        raise LLMProviderError() from last_error
+        raise llm_error_for_http_status(last_error.code) from last_error
 
-    raise LLMTimeoutError() from last_error
+    if is_timeout_error(last_error):
+        raise LLMTimeoutError() from last_error
+
+    raise LLMNetworkError() from last_error
 
 
 def is_transient_http_status(status_code):
     return status_code == 429 or 500 <= status_code <= 599
+
+
+def llm_error_for_http_status(status_code):
+    if status_code == 401:
+        return LLMAuthenticationError()
+    if status_code == 403:
+        return LLMPermissionError()
+    if status_code == 429:
+        return LLMRateLimitError()
+    if 500 <= status_code <= 599:
+        return LLMProviderUnavailableError()
+    return LLMProviderError()
+
+
+def is_timeout_error(error):
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(error, urllib.error.URLError):
+        return isinstance(error.reason, (TimeoutError, socket.timeout))
+    return False
 
 
 def retry_delay_seconds(config, attempt):

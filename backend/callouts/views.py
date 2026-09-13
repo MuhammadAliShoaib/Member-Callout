@@ -17,11 +17,7 @@ from callouts.models import Announcement, AnnouncementRecipient, AnnouncementSta
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
 from callouts.services.llm_service import (
-    LLMConfigurationError,
-    LLMInvalidResponseError,
-    LLMProviderError,
     LLMServiceError,
-    LLMTimeoutError,
     regenerate_announcement_text,
 )
 from callouts.tasks import deliver_recipient_batch, recipient_batch_size
@@ -32,6 +28,13 @@ RECIPIENT_BULK_CREATE_BATCH_SIZE = 500
 AUDIENCE_QUERY_CHUNK_SIZE = 1000
 AI_REGENERATE_TEXT_MAX_LENGTH = 5000
 AI_REGENERATE_INSTRUCTION_MAX_LENGTH = 500
+ANNOUNCEMENT_EDITABLE_FIELDS = {
+    'title',
+    'body',
+    'push_preview',
+    'target_classification',
+    'needs_ack',
+}
 
 
 def announcement_content_hash(announcement):
@@ -438,13 +441,7 @@ def announcement_ai_regenerate(request):
 
 
 def llm_error_status(error):
-    if isinstance(error, LLMConfigurationError):
-        return status.HTTP_503_SERVICE_UNAVAILABLE
-    if isinstance(error, LLMTimeoutError):
-        return status.HTTP_504_GATEWAY_TIMEOUT
-    if isinstance(error, (LLMProviderError, LLMInvalidResponseError)):
-        return status.HTTP_502_BAD_GATEWAY
-    return status.HTTP_502_BAD_GATEWAY
+    return getattr(error, 'status_code', status.HTTP_502_BAD_GATEWAY)
 
 
 @api_view(['GET', 'PATCH'])
@@ -455,6 +452,11 @@ def announcement_detail(request, announcement_id):
         id=announcement_id,
     )
     if request.method == 'PATCH':
+        if not announcement.content_editable and ANNOUNCEMENT_EDITABLE_FIELDS.intersection(request.data):
+            return Response(
+                {'detail': 'Announcement content can no longer be edited.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = AnnouncementSerializer(announcement, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         announcement = serializer.save()

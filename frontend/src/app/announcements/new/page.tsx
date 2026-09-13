@@ -15,12 +15,12 @@ export default function NewAnnouncementPage() {
   const [targetClassification, setTargetClassification] = useState('');
   const [needsAck, setNeedsAck] = useState(false);
 
-  const [aiNote, setAiNote] = useState('');
-  const [showAi, setShowAi] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState('');
-  const aiGeneration = useRef(0);
+  const [aiNotice, setAiNotice] = useState('');
+  const latestAIRequestId = useRef('');
+  const bodyRef = useRef('');
 
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -38,32 +38,38 @@ export default function NewAnnouncementPage() {
     router.replace('/login');
   }
 
-  async function handleAIDraft() {
-    if (!aiNote.trim()) return;
+  async function handleAIRegenerate() {
+    if (!body.trim()) return;
     const token = getToken();
     if (!token) return;
+    const requestSourceText = body;
+    const clientRequestId = crypto.randomUUID();
+    latestAIRequestId.current = clientRequestId;
     setAiError('');
     setAiSuggestion('');
+    setAiNotice('');
     setAiLoading(true);
-    const requestId = ++aiGeneration.current;
     try {
-      const result = await apiAIRegenerate(token, aiNote.trim());
-      if (requestId !== aiGeneration.current) return;
+      const result = await apiAIRegenerate(token, requestSourceText, undefined, clientRequestId);
+      if (clientRequestId !== latestAIRequestId.current) return;
+      if (bodyRef.current !== requestSourceText) {
+        setAiNotice('The announcement changed while AI was generating this suggestion.');
+      }
       setAiSuggestion(result.generated_text);
     } catch (err) {
-      if (requestId !== aiGeneration.current) return;
-      setAiError(err instanceof Error ? err.message : 'AI draft failed.');
+      if (clientRequestId !== latestAIRequestId.current) return;
+      setAiError(err instanceof Error ? err.message : 'AI regeneration failed.');
     } finally {
-      if (requestId === aiGeneration.current) setAiLoading(false);
+      if (clientRequestId === latestAIRequestId.current) setAiLoading(false);
     }
   }
 
   function applyAiSuggestion() {
     if (!aiSuggestion) return;
     setBody(aiSuggestion);
+    bodyRef.current = aiSuggestion;
     setAiSuggestion('');
-    setShowAi(false);
-    setAiNote('');
+    setAiNotice('');
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -107,68 +113,6 @@ export default function NewAnnouncementPage() {
       <main className="container page">
         <h1 className="page-title">New Announcement</h1>
 
-        {showAi ? (
-          <div className="ai-section">
-            <p className="ai-section-title">Draft with AI</p>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label" htmlFor="ai-note">
-                Describe what you want to announce
-              </label>
-              <textarea
-                id="ai-note"
-                className="form-textarea"
-                value={aiNote}
-                onChange={e => setAiNote(e.target.value)}
-                placeholder="e.g. Remind members about the general meeting this Thursday at 7pm in the union hall."
-                rows={3}
-              />
-            </div>
-            {aiError && <p className="error-msg">{aiError}</p>}
-            {aiSuggestion && (
-              <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 12, background: 'var(--surface)' }}>
-                <p className="form-label">AI suggestion</p>
-                <p style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>{aiSuggestion}</p>
-                <div className="ai-actions">
-                  <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>
-                    Apply to body
-                  </button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiSuggestion('')}>
-                    Discard
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="ai-actions">
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleAIDraft}
-                disabled={aiLoading || !aiNote.trim()}
-              >
-                {aiLoading ? <span className="spinner" /> : null}
-                {aiLoading ? 'Generating…' : 'Generate draft'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => { setShowAi(false); setAiNote(''); setAiError(''); }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ marginBottom: '24px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowAi(true)}
-            >
-              ✦ Draft with AI
-            </button>
-          </div>
-        )}
-
         <div className="card">
           <form onSubmit={handleSubmit}>
             <div className="form-group">
@@ -191,11 +135,36 @@ export default function NewAnnouncementPage() {
                 id="body"
                 className="form-textarea"
                 value={body}
-                onChange={e => setBody(e.target.value)}
+                onChange={e => { setBody(e.target.value); bodyRef.current = e.target.value; }}
                 required
                 placeholder="Full announcement text"
                 rows={6}
               />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleAIRegenerate}
+                disabled={aiLoading || !body.trim()}
+                style={{ marginTop: 8 }}
+              >
+                {aiLoading ? 'Generating...' : 'Regenerate with AI'}
+              </button>
+              {aiError && <p className="error-msg">{aiError}</p>}
+              {aiSuggestion && (
+                <div style={{ marginTop: 10, padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+                  <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
+                  {aiNotice && <p style={{ color: 'var(--muted)', fontSize: '0.875rem', marginBottom: 8 }}>{aiNotice}</p>}
+                  <p style={{ whiteSpace: 'pre-wrap', marginBottom: 10 }}>{aiSuggestion}</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>
+                      Use this version
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAiSuggestion(''); setAiNotice(''); }}>
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="form-group">

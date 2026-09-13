@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   apiListAnnouncements,
   apiCreateAnnouncement,
@@ -48,12 +49,12 @@ export default function AnnouncementsPage() {
   const [classification, setClassification] = useState('');
   const [needsAck, setNeedsAck] = useState(false);
 
-  const [aiNote, setAiNote] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState('');
-  const aiGeneration = useRef(0);
-  const aiNoteRef = useRef<string>('');
+  const [aiNotice, setAiNotice] = useState('');
+  const latestAIRequestId = useRef('');
+  const bodyRef = useRef('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -74,7 +75,8 @@ export default function AnnouncementsPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) { router.replace('/login'); return; }
-    loadList(token);
+    const timer = window.setTimeout(() => { void loadList(token); }, 0);
+    return () => window.clearTimeout(timer);
   }, [router, loadList]);
 
   async function loadPanelStats(id: string) {
@@ -149,36 +151,37 @@ export default function AnnouncementsPage() {
     return () => clearInterval(intervalId);
   }, [panel?.id, panel?.status]);
 
-  async function handleAIDraft() {
+  async function handleAIRegenerate() {
     const token = getToken();
-    if (!token || !aiNote.trim()) return;
+    if (!token || !body.trim()) return;
+    const requestSourceText = body;
+    const clientRequestId = crypto.randomUUID();
+    latestAIRequestId.current = clientRequestId;
     setAiError('');
     setAiSuggestion('');
+    setAiNotice('');
     setAiLoading(true);
-    const id = ++aiGeneration.current;
-    const clientRequestId = crypto.randomUUID();
-    const noteAtRequestTime = aiNoteRef.current;
     try {
-      const result = await apiAIRegenerate(token, aiNote.trim(), undefined, clientRequestId);
-      if (id !== aiGeneration.current) return;
-      if (result.client_request_id !== clientRequestId) return;
-      if (aiNoteRef.current !== noteAtRequestTime) {
-        setAiError('AI suggestion discarded because the note changed while it was being generated.');
-        return;
+      const result = await apiAIRegenerate(token, requestSourceText, undefined, clientRequestId);
+      if (clientRequestId !== latestAIRequestId.current) return;
+      if (bodyRef.current !== requestSourceText) {
+        setAiNotice('The announcement changed while AI was generating this suggestion.');
       }
       setAiSuggestion(result.generated_text);
     } catch (err) {
-      if (id !== aiGeneration.current) return;
-      setAiError(err instanceof Error ? err.message : 'AI draft failed.');
+      if (clientRequestId !== latestAIRequestId.current) return;
+      setAiError(err instanceof Error ? err.message : 'AI regeneration failed.');
     } finally {
-      if (id === aiGeneration.current) setAiLoading(false);
+      if (clientRequestId === latestAIRequestId.current) setAiLoading(false);
     }
   }
 
   function applyAiSuggestion() {
     if (!aiSuggestion) return;
     setBody(aiSuggestion);
+    bodyRef.current = aiSuggestion;
     setAiSuggestion('');
+    setAiNotice('');
   }
 
   async function handleConfirm() {
@@ -381,40 +384,6 @@ export default function AnnouncementsPage() {
         {/* New announcement */}
         <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 16 }}>New Announcement</h2>
         <div className="card">
-          <div style={{ marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
-            <p style={{ fontWeight: 600, marginBottom: 10 }}>Improve with AI</p>
-            <div className="form-group" style={{ marginBottom: 10 }}>
-              <label className="form-label" htmlFor="ai-note">Rough note</label>
-              <textarea
-                id="ai-note"
-                className="form-textarea"
-                value={aiNote}
-                onChange={e => { setAiNote(e.target.value); aiNoteRef.current = e.target.value; }}
-                rows={3}
-                placeholder="Jot down what you want to say — the AI will clean it up into a proper announcement."
-              />
-            </div>
-            {aiError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginBottom: 8 }}>{aiError}</p>}
-            {aiSuggestion && (
-              <div style={{ marginBottom: 8, padding: '10px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: '0.875rem' }}>
-                <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
-                <p style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{aiSuggestion}</p>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>Apply to body</button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiSuggestion('')}>Discard</button>
-                </div>
-              </div>
-            )}
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={handleAIDraft}
-              disabled={aiLoading || !aiNote.trim()}
-            >
-              {aiLoading ? 'Generating…' : 'Improve with AI'}
-            </button>
-          </div>
-
           <form onSubmit={e => { e.preventDefault(); handleSubmit(); }}>
             <div className="form-group">
               <label className="form-label" htmlFor="title">Title</label>
@@ -435,10 +404,31 @@ export default function AnnouncementsPage() {
                 id="body"
                 className="form-textarea"
                 value={body}
-                onChange={e => setBody(e.target.value)}
+                onChange={e => { setBody(e.target.value); bodyRef.current = e.target.value; }}
                 required
                 rows={6}
               />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleAIRegenerate}
+                disabled={aiLoading || !body.trim()}
+                style={{ marginTop: 8 }}
+              >
+                {aiLoading ? 'Generating...' : 'Regenerate with AI'}
+              </button>
+              {aiError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 8 }}>{aiError}</p>}
+              {aiSuggestion && (
+                <div style={{ marginTop: 10, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: '0.875rem' }}>
+                  <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
+                  {aiNotice && <p style={{ color: 'var(--muted)', marginBottom: 8 }}>{aiNotice}</p>}
+                  <p style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{aiSuggestion}</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>Use this version</button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAiSuggestion(''); setAiNotice(''); }}>Discard</button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="form-group">
@@ -499,7 +489,7 @@ export default function AnnouncementsPage() {
             <div style={{ marginTop: 16, fontSize: '0.9rem', display: 'flex', flexDirection: 'column', gap: 6 }}>
               <p>
                 <strong>Status:</strong> {result.status} —{' '}
-                <a href={`/announcements/${result.id}`} style={{ color: 'var(--primary)' }}>Edit</a>
+                <Link href={`/announcements/${result.id}`} style={{ color: 'var(--primary)' }}>Edit</Link>
               </p>
               {confirmSuccess && (
                 <p style={{ color: '#16a34a' }}>Content confirmed</p>

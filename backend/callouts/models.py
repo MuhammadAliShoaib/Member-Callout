@@ -114,6 +114,13 @@ class Announcement(models.Model):
             for field in ('title', 'body', 'push_preview')
         )
 
+    @property
+    def content_editable(self):
+        return self.status in {
+            self.Status.DRAFT,
+            self.Status.CONFIRMED,
+        }
+
     def reset_confirmation(self):
         self.confirmed_content_hash = ''
         self.confirmed_at = None

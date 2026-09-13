@@ -4,6 +4,8 @@ from callouts.models import Announcement
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
+    content_editable = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = Announcement
         fields = [
@@ -16,6 +18,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'target_classification',
             'needs_ack',
             'status',
+            'content_editable',
             'confirmed_content_hash',
             'created_at',
             'confirmed_at',

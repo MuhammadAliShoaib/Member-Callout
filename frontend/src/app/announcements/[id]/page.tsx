@@ -43,25 +43,25 @@ export default function AnnouncementDetailPage() {
   const [actionError, setActionError] = useState('');
   const [stats, setStats] = useState<AnnouncementStats | null>(null);
   const statsEtag = useRef<string | null>(null);
-  const statusRef = useRef<Announcement['status'] | null>(null);
+  const contentEditableRef = useRef(false);
 
-  const [aiInstruction, setAiInstruction] = useState('');
   const [aiSuggestion, setAiSuggestion] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
-  const aiGeneration = useRef(0);
-  const bodyRef = useRef<string>('');
+  const [aiNotice, setAiNotice] = useState('');
+  const latestAIRequestId = useRef('');
+  const bodyRef = useRef('');
 
   function populate(a: Announcement) {
     setAnnouncement(a);
-    statusRef.current = a.status;
+    contentEditableRef.current = a.content_editable;
     setTitle(a.title);
     setBody(a.body);
     bodyRef.current = a.body;
     setPushPreview(a.push_preview);
     setClassification(a.target_classification ?? '');
     setNeedsAck(a.needs_ack);
-    if (a.status !== 'draft') {
+    if (!a.content_editable) {
       setAiSuggestion('');
     }
   }
@@ -84,7 +84,8 @@ export default function AnnouncementDetailPage() {
   useEffect(() => {
     const token = getToken();
     if (!token) { router.replace('/login'); return; }
-    load(token);
+    const timer = window.setTimeout(() => { void load(token); }, 0);
+    return () => window.clearTimeout(timer);
   }, [router, load]);
 
   // Poll announcement + stats while queued; load once when sent.
@@ -152,44 +153,44 @@ export default function AnnouncementDetailPage() {
 
   async function handleAIRegenerate() {
     const token = getToken();
-    if (!token || !body.trim() || announcement?.status !== 'draft') return;
+    if (!token || !body.trim() || !announcement?.content_editable) return;
+    const requestSourceText = body;
+    const clientRequestId = crypto.randomUUID();
+    latestAIRequestId.current = clientRequestId;
     setAiError('');
     setAiSuggestion('');
+    setAiNotice('');
     setAiLoading(true);
-    const requestId = ++aiGeneration.current;
-    const clientRequestId = crypto.randomUUID();
-    const bodyAtRequestTime = bodyRef.current;
     try {
-      const result = await apiAIRegenerate(token, body.trim(), aiInstruction.trim() || undefined, clientRequestId);
-      if (requestId !== aiGeneration.current) return;
-      if (result.client_request_id !== clientRequestId) return;
-      if (statusRef.current !== 'draft') {
-        setAiError('AI suggestion discarded because this announcement is no longer a draft.');
+      const result = await apiAIRegenerate(token, requestSourceText, undefined, clientRequestId);
+      if (clientRequestId !== latestAIRequestId.current) return;
+      if (!contentEditableRef.current) {
+        setAiError('AI suggestion discarded because this announcement can no longer be edited.');
         return;
       }
-      if (bodyRef.current !== bodyAtRequestTime) {
-        setAiError('AI suggestion discarded because the body text changed while it was being generated.');
-        return;
+      if (bodyRef.current !== requestSourceText) {
+        setAiNotice('The announcement changed while AI was generating this suggestion.');
       }
       setAiSuggestion(result.generated_text);
     } catch (err) {
-      if (requestId !== aiGeneration.current) return;
+      if (clientRequestId !== latestAIRequestId.current) return;
       setAiError(err instanceof Error ? err.message : 'AI regeneration failed.');
     } finally {
-      if (requestId === aiGeneration.current) setAiLoading(false);
+      if (clientRequestId === latestAIRequestId.current) setAiLoading(false);
     }
   }
 
   function applyAiSuggestion() {
     if (!aiSuggestion) return;
-    if (statusRef.current !== 'draft') {
+    if (!contentEditableRef.current) {
       setAiSuggestion('');
-      setAiError('AI suggestion discarded because this announcement is no longer a draft.');
+      setAiError('AI suggestion discarded because this announcement can no longer be edited.');
       return;
     }
     setBody(aiSuggestion);
     bodyRef.current = aiSuggestion;
     setAiSuggestion('');
+    setAiNotice('');
   }
 
   async function handleConfirm() {
@@ -265,6 +266,7 @@ export default function AnnouncementDetailPage() {
                 className="form-input"
                 value={title}
                 onChange={e => setTitle(e.target.value)}
+                disabled={!announcement.content_editable}
                 maxLength={255}
               />
             </div>
@@ -276,48 +278,39 @@ export default function AnnouncementDetailPage() {
                 className="form-textarea"
                 value={body}
                 onChange={e => { setBody(e.target.value); bodyRef.current = e.target.value; }}
+                disabled={!announcement.content_editable}
                 rows={6}
               />
-            </div>
-
-            {announcement.status === 'draft' && (
-              <div className="form-group" style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg)' }}>
-                <label className="form-label" htmlFor="ai-instruction">Regenerate body with AI</label>
-                <input
-                  id="ai-instruction"
-                  type="text"
-                  className="form-input"
-                  value={aiInstruction}
-                  onChange={e => setAiInstruction(e.target.value)}
-                  maxLength={500}
-                  placeholder="Optional instruction, e.g. Make it shorter"
-                />
-                {aiError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 8 }}>{aiError}</p>}
-                {aiSuggestion && (
-                  <div style={{ marginTop: 10, padding: 10, border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface)' }}>
-                    <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
-                    <p style={{ whiteSpace: 'pre-wrap', marginBottom: 10 }}>{aiSuggestion}</p>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>
-                        Apply to body
-                      </button>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAiSuggestion('')}>
-                        Discard
-                      </button>
+              {announcement.content_editable && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleAIRegenerate}
+                    disabled={aiLoading || !body.trim()}
+                    style={{ marginTop: 8 }}
+                  >
+                    {aiLoading ? 'Generating...' : 'Regenerate with AI'}
+                  </button>
+                  {aiError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem', marginTop: 8 }}>{aiError}</p>}
+                  {aiSuggestion && (
+                    <div style={{ marginTop: 10, padding: 10, border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--surface)' }}>
+                      <p style={{ fontWeight: 600, marginBottom: 6 }}>AI suggestion</p>
+                      {aiNotice && <p style={{ color: 'var(--muted)', fontSize: '0.875rem', marginBottom: 8 }}>{aiNotice}</p>}
+                      <p style={{ whiteSpace: 'pre-wrap', marginBottom: 10 }}>{aiSuggestion}</p>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button type="button" className="btn btn-primary btn-sm" onClick={applyAiSuggestion}>
+                          Use this version
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setAiSuggestion(''); setAiNotice(''); }}>
+                          Discard
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleAIRegenerate}
-                  disabled={aiLoading || !body.trim()}
-                  style={{ marginTop: 10 }}
-                >
-                  {aiLoading ? 'Regenerating…' : 'Regenerate suggestion'}
-                </button>
-              </div>
-            )}
+                  )}
+                </>
+              )}
+            </div>
 
             <div className="form-group">
               <label className="form-label" htmlFor="push-preview">Push preview</label>
@@ -327,6 +320,7 @@ export default function AnnouncementDetailPage() {
                 className="form-input"
                 value={pushPreview}
                 onChange={e => setPushPreview(e.target.value)}
+                disabled={!announcement.content_editable}
                 maxLength={255}
               />
             </div>
@@ -342,6 +336,7 @@ export default function AnnouncementDetailPage() {
                 className="form-input"
                 value={classification}
                 onChange={e => setClassification(e.target.value)}
+                disabled={!announcement.content_editable}
                 placeholder="Leave blank for all members"
               />
             </div>
@@ -352,6 +347,7 @@ export default function AnnouncementDetailPage() {
                   type="checkbox"
                   checked={needsAck}
                   onChange={e => setNeedsAck(e.target.checked)}
+                  disabled={!announcement.content_editable}
                 />
                 Needs acknowledgement
               </label>
@@ -365,7 +361,7 @@ export default function AnnouncementDetailPage() {
                     type="button"
                     className="btn btn-secondary"
                     onClick={handleSave}
-                    disabled={busy}
+                    disabled={busy || !announcement.content_editable}
                   >
                     {saveLoading ? 'Saving…' : 'Save changes'}
                   </button>

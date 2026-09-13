@@ -34,6 +34,7 @@ export interface Announcement {
   target_classification: string | null;
   needs_ack: boolean;
   status: 'draft' | 'confirmed' | 'queued' | 'sent';
+  content_editable: boolean;
   confirmed_content_hash: string;
   created_at: string;
   confirmed_at: string | null;
@@ -49,7 +50,6 @@ export interface AIDraft {
 
 export interface AIRegeneration {
   generated_text: string;
-  client_request_id: string | null;
 }
 
 export interface AnnouncementStats {
@@ -107,7 +107,7 @@ export function apiAIRegenerate(token: string, text: string, instruction?: strin
       body: JSON.stringify({
         text,
         instruction: instruction?.trim() || undefined,
-        ...(clientRequestId !== undefined ? { client_request_id: clientRequestId } : {}),
+        client_request_id: clientRequestId,
       }),
     },
     token,

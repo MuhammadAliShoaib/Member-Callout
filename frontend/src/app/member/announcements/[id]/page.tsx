@@ -33,7 +33,8 @@ export default function MemberAnnouncementDetailPage() {
     if (!token) { router.replace('/login'); return; }
     const m = getMember();
     if (m?.role === 'leader') { router.replace('/announcements'); return; }
-    load(token);
+    const timer = window.setTimeout(() => { void load(token); }, 0);
+    return () => window.clearTimeout(timer);
   }, [router, load]);
 
   async function handleAcknowledge() {
