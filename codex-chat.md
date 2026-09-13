@@ -413,3 +413,19 @@ Enable:
 - task time limits
 
 Keep the configuration minimal.
+
+### User Prompt
+
+Add delivery metadata to AnnouncementRecipient:
+
+- attempt_count: integer, default 0
+- last_error: nullable text
+- claimed_at: nullable datetime
+- claimed_by: nullable string
+
+Keep delivery_status as:
+pending | sent | failed
+
+Do not add processing status.
+
+Create the migration.

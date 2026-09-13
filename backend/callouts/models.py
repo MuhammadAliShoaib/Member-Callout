@@ -144,6 +144,10 @@ class AnnouncementRecipient(models.Model):
         choices=DeliveryStatus.choices,
         default=DeliveryStatus.PENDING,
     )
+    attempt_count = models.IntegerField(default=0)
+    last_error = models.TextField(blank=True, null=True)
+    claimed_at = models.DateTimeField(blank=True, null=True)
+    claimed_by = models.CharField(max_length=255, blank=True, null=True)
     sent_at = models.DateTimeField(blank=True, null=True)
     read_at = models.DateTimeField(blank=True, null=True)
     acknowledged_at = models.DateTimeField(blank=True, null=True)
