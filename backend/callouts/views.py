@@ -48,6 +48,41 @@ def announcement_audience_queryset(announcement):
     return Member.objects.filter(**announcement_audience_filters(announcement))
 
 
+def announcement_audience_count(announcement):
+    return announcement_audience_queryset(announcement).count()
+
+
+def announcement_audience_size_error(audience_count):
+    return {
+        'detail': (
+            f'Announcement audience has {audience_count} eligible members; '
+            f'maximum is {MAX_ANNOUNCEMENT_RECIPIENTS}.'
+        ),
+    }
+
+
+def validate_announcement_audience_size(announcement):
+    audience_count = announcement_audience_count(announcement)
+
+    if audience_count > MAX_ANNOUNCEMENT_RECIPIENTS:
+        return Response(
+            announcement_audience_size_error(audience_count),
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return None
+
+
+def create_announcement_recipients_for_send(announcement):
+    audience_size_error = validate_announcement_audience_size(announcement)
+    if audience_size_error:
+        return audience_size_error
+
+    expand_announcement_audience(announcement)
+    update_announcement_target_count(announcement)
+    return None
+
+
 def update_announcement_target_count(announcement):
     stats, _ = AnnouncementStats.objects.get_or_create(
         announcement=announcement,
@@ -256,8 +291,10 @@ def announcement_send(request, announcement_id):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            expand_announcement_audience(announcement)
-            update_announcement_target_count(announcement)
+            recipient_creation_error = create_announcement_recipients_for_send(announcement)
+            if recipient_creation_error:
+                return recipient_creation_error
+
             return Response(AnnouncementSerializer(announcement).data)
 
         if announcement.status != Announcement.Status.CONFIRMED:
@@ -271,6 +308,10 @@ def announcement_send(request, announcement_id):
                 {'detail': 'Announcement content has changed since confirmation.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        audience_size_error = validate_announcement_audience_size(announcement)
+        if audience_size_error:
+            return audience_size_error
 
         announcement.status = Announcement.Status.QUEUED
         announcement.queued_at = timezone.now()

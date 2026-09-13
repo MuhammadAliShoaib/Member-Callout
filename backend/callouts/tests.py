@@ -27,12 +27,15 @@ from callouts.tasks import (
 from callouts.views import (
     MAX_ANNOUNCEMENT_RECIPIENTS,
     RECIPIENT_BULK_CREATE_BATCH_SIZE,
+    announcement_audience_count,
     announcement_audience_filters,
     announcement_audience_values_queryset,
     announcement_content_hash,
     announcement_content_is_confirmed,
     announcement_recipient_for_member,
+    create_announcement_recipients_for_send,
     expand_announcement_audience,
+    validate_announcement_audience_size,
 )
 
 
@@ -265,6 +268,55 @@ class AnnouncementAudienceTests(SimpleTestCase):
         self.assertEqual(queryset.query.values_select, ('id', 'classification'))
         self.assertEqual(queryset.query.high_mark, MAX_ANNOUNCEMENT_RECIPIENTS)
         self.assertEqual(queryset.query.order_by, ('id',))
+
+    @patch('callouts.views.announcement_audience_queryset')
+    def test_audience_count_uses_database_count(self, announcement_audience_queryset):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+
+        count = announcement_audience_count(announcement)
+
+        self.assertEqual(count, announcement_audience_queryset.return_value.count.return_value)
+        announcement_audience_queryset.return_value.count.assert_called_once_with()
+
+    @patch('callouts.views.announcement_audience_count')
+    def test_oversized_audience_returns_clear_validation_error(self, announcement_audience_count):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+        audience_count = MAX_ANNOUNCEMENT_RECIPIENTS + 1
+        announcement_audience_count.return_value = audience_count
+
+        response = validate_announcement_audience_size(announcement)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data,
+            {
+                'detail': (
+                    f'Announcement audience has {audience_count} eligible members; '
+                    f'maximum is {MAX_ANNOUNCEMENT_RECIPIENTS}.'
+                ),
+            },
+        )
+
+    @patch('callouts.views.update_announcement_target_count')
+    @patch('callouts.views.expand_announcement_audience')
+    @patch('callouts.views.announcement_audience_count')
+    def test_oversized_audience_is_rejected_before_creating_recipients(
+        self,
+        announcement_audience_count,
+        expand_announcement_audience,
+        update_announcement_target_count,
+    ):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+        announcement_audience_count.return_value = MAX_ANNOUNCEMENT_RECIPIENTS + 1
+
+        response = create_announcement_recipients_for_send(announcement)
+
+        self.assertEqual(response.status_code, 400)
+        expand_announcement_audience.assert_not_called()
+        update_announcement_target_count.assert_not_called()
 
     @patch('callouts.views.bulk_create_announcement_recipients')
     @patch('callouts.views.announcement_audience_values')

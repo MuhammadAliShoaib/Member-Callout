@@ -549,3 +549,15 @@ Add appropriate PostgreSQL indexes.
 Avoid redundant indexes.
 
 Explain the chosen indexes.
+
+### User Prompt
+
+Enforce a maximum audience size of 22,400.
+
+Before creating recipients:
+- count eligible members in PostgreSQL
+- reject send if count exceeds 22,400
+
+Return a clear validation error.
+
+Do not rely on frontend validation.
