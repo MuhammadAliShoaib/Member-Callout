@@ -513,3 +513,24 @@ If some recipients in a batch fail temporarily:
 - use exponential backoff
 
 Never retry the entire original batch unnecessarily.
+
+### User Prompt
+
+starting a new chat, whatever prompts i am going to give append them in the end of codex-chat.md file
+
+### User Prompt
+
+Optimize announcement audience selection.
+
+Scale:
+- up to 187,000 members per local
+- maximum 22,400 recipients per announcement
+
+Requirements:
+- filter in PostgreSQL
+- filter by local
+- active members only
+- optionally filter classification
+- select only required fields
+- never load all local members into Python
+

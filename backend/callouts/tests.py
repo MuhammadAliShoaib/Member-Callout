@@ -25,10 +25,14 @@ from callouts.tasks import (
     retry_countdown,
 )
 from callouts.views import (
+    MAX_ANNOUNCEMENT_RECIPIENTS,
+    RECIPIENT_BULK_CREATE_BATCH_SIZE,
     announcement_audience_filters,
+    announcement_audience_values_queryset,
     announcement_content_hash,
     announcement_content_is_confirmed,
     announcement_recipient_for_member,
+    expand_announcement_audience,
 )
 
 
@@ -251,6 +255,40 @@ class AnnouncementAudienceTests(SimpleTestCase):
         self.assertEqual(recipient.announcement, announcement)
         self.assertEqual(recipient.member_id, member.id)
         self.assertEqual(recipient.classification_snapshot, 'journeyman')
+
+    def test_audience_values_queryset_selects_only_required_fields_and_caps_results(self):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+
+        queryset = announcement_audience_values_queryset(announcement)
+
+        self.assertEqual(queryset.query.values_select, ('id', 'classification'))
+        self.assertEqual(queryset.query.high_mark, MAX_ANNOUNCEMENT_RECIPIENTS)
+        self.assertEqual(queryset.query.order_by, ('id',))
+
+    @patch('callouts.views.bulk_create_announcement_recipients')
+    @patch('callouts.views.announcement_audience_values')
+    def test_expand_audience_streams_recipients_in_bulk_create_batches(
+        self,
+        announcement_audience_values,
+        bulk_create_announcement_recipients,
+    ):
+        local = Local(name='Local 27')
+        announcement = Announcement(local=local)
+        audience_size = RECIPIENT_BULK_CREATE_BATCH_SIZE + 1
+        announcement_audience_values.return_value = (
+            (f'member-{number}', 'journeyman')
+            for number in range(audience_size)
+        )
+
+        created_count = expand_announcement_audience(announcement)
+
+        self.assertEqual(created_count, audience_size)
+        self.assertEqual(bulk_create_announcement_recipients.call_count, 2)
+        first_batch = bulk_create_announcement_recipients.call_args_list[0].args[0]
+        second_batch = bulk_create_announcement_recipients.call_args_list[1].args[0]
+        self.assertEqual(len(first_batch), RECIPIENT_BULK_CREATE_BATCH_SIZE)
+        self.assertEqual(len(second_batch), 1)
 
 
 class DeliveryTaskTests(SimpleTestCase):

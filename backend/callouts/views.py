@@ -17,6 +17,10 @@ from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.serializers import AnnouncementSerializer
 from callouts.tenant import for_request_local
 
+MAX_ANNOUNCEMENT_RECIPIENTS = 22400
+RECIPIENT_BULK_CREATE_BATCH_SIZE = 500
+AUDIENCE_QUERY_CHUNK_SIZE = 1000
+
 
 def announcement_content_hash(announcement):
     content = f'{announcement.title}{announcement.body}{announcement.push_preview}'
@@ -58,29 +62,68 @@ def update_announcement_target_count(announcement):
 
 
 def expand_announcement_audience(announcement):
-    recipients = announcement_recipients_for_audience(announcement)
+    created_count = 0
+    batch = []
 
-    AnnouncementRecipient.objects.bulk_create(
-        recipients,
-        batch_size=500,
-        ignore_conflicts=True,
-    )
-    return len(recipients)
+    for member_id, classification in announcement_audience_values(announcement):
+        batch.append(announcement_recipient_for_member_values(announcement, member_id, classification))
+        created_count += 1
+
+        if len(batch) == RECIPIENT_BULK_CREATE_BATCH_SIZE:
+            bulk_create_announcement_recipients(batch)
+            batch = []
+
+    if batch:
+        bulk_create_announcement_recipients(batch)
+
+    return created_count
 
 
 def announcement_recipients_for_audience(announcement):
     return [
         announcement_recipient_for_member(announcement, member)
-        for member in announcement_audience_queryset(announcement).only('id', 'classification')
+        for member in announcement_audience_queryset(announcement)
+        .only('id', 'classification')
+        .order_by('id')[:MAX_ANNOUNCEMENT_RECIPIENTS]
     ]
 
 
+def announcement_audience_values(announcement):
+    return announcement_audience_values_queryset(announcement).iterator(
+        chunk_size=AUDIENCE_QUERY_CHUNK_SIZE,
+    )
+
+
+def announcement_audience_values_queryset(announcement):
+    return (
+        announcement_audience_queryset(announcement)
+        .order_by('id')
+        .values_list('id', 'classification')[:MAX_ANNOUNCEMENT_RECIPIENTS]
+    )
+
+
 def announcement_recipient_for_member(announcement, member):
+    return announcement_recipient_for_member_values(
+        announcement,
+        member.id,
+        member.classification,
+    )
+
+
+def announcement_recipient_for_member_values(announcement, member_id, classification):
     return AnnouncementRecipient(
         local=announcement.local,
         announcement=announcement,
-        member_id=member.id,
-        classification_snapshot=member.classification,
+        member_id=member_id,
+        classification_snapshot=classification,
+    )
+
+
+def bulk_create_announcement_recipients(recipients):
+    AnnouncementRecipient.objects.bulk_create(
+        recipients,
+        batch_size=RECIPIENT_BULK_CREATE_BATCH_SIZE,
+        ignore_conflicts=True,
     )
 
 
