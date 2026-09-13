@@ -8,7 +8,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
-from callouts.models import AnnouncementRecipient
+from callouts.models import AnnouncementRecipient, AnnouncementStats
 
 logger = logging.getLogger(__name__)
 
@@ -90,16 +90,32 @@ def recipients_for_delivery(recipient_ids):
 
 def mark_recipients_sent(recipient_ids):
     sent_at = timezone.now()
-    return AnnouncementRecipient.objects.filter(
+    sent_counts = {}
+    recipients_by_announcement = {}
+
+    pending_recipients = AnnouncementRecipient.objects.filter(
         id__in=recipient_ids,
         delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
-    ).update(
-        delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
-        sent_at=sent_at,
-        claimed_at=None,
-        claimed_by=None,
-        last_error=None,
-    )
+    ).values_list('announcement_id', 'id')
+
+    for announcement_id, recipient_id in pending_recipients:
+        recipients_by_announcement.setdefault(announcement_id, []).append(recipient_id)
+
+    for announcement_id, announcement_recipient_ids in recipients_by_announcement.items():
+        updated = AnnouncementRecipient.objects.filter(
+            id__in=announcement_recipient_ids,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+        ).update(
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+            sent_at=sent_at,
+            claimed_at=None,
+            claimed_by=None,
+            last_error=None,
+        )
+        if updated:
+            sent_counts[announcement_id] = updated
+
+    return sent_counts
 
 
 def mark_temporary_delivery_failure(recipient, error):
@@ -135,6 +151,31 @@ def mark_terminal_delivery_failure(recipient, error):
     )
 
 
+def update_announcement_stats_for_delivery_batch(stats_counts):
+    for announcement_id, counts in stats_counts.items():
+        sent_count = counts.get('sent', 0)
+        failed_count = counts.get('failed', 0)
+
+        if not sent_count and not failed_count:
+            continue
+
+        AnnouncementStats.objects.filter(
+            announcement_id=announcement_id,
+        ).update(
+            sent_count=F('sent_count') + sent_count,
+            failed_count=F('failed_count') + failed_count,
+            updated_at=timezone.now(),
+        )
+
+
+def add_stats_count(stats_counts, announcement_id, field, count):
+    if not count:
+        return
+
+    counts = stats_counts.setdefault(announcement_id, {'sent': 0, 'failed': 0})
+    counts[field] += count
+
+
 def fake_push_delivery(recipient):
     logger.info(
         'Fake push: %s | %s | %s',
@@ -158,6 +199,7 @@ def deliver_recipient_batch(recipient_ids):
     retryable_ids = []
     temporary_failures = 0
     terminal_failures = 0
+    stats_counts = {}
 
     for recipient in recipients:
         try:
@@ -167,12 +209,22 @@ def deliver_recipient_batch(recipient_ids):
             temporary_failures += updated
             if updated and retryable:
                 retryable_ids.append(recipient.id)
+            elif updated:
+                add_stats_count(stats_counts, recipient.announcement_id, 'failed', updated)
         except TerminalDeliveryError as exc:
-            terminal_failures += mark_terminal_delivery_failure(recipient, exc)
+            updated = mark_terminal_delivery_failure(recipient, exc)
+            terminal_failures += updated
+            add_stats_count(stats_counts, recipient.announcement_id, 'failed', updated)
         else:
             delivered_ids.append(recipient.id)
 
-    processed = mark_recipients_sent(delivered_ids)
+    sent_counts = mark_recipients_sent(delivered_ids)
+    processed = sum(sent_counts.values())
+
+    for announcement_id, sent_count in sent_counts.items():
+        add_stats_count(stats_counts, announcement_id, 'sent', sent_count)
+
+    update_announcement_stats_for_delivery_batch(stats_counts)
 
     if retryable_ids:
         next_attempt_count = min(recipient.attempt_count + 1 for recipient in recipients if recipient.id in retryable_ids)

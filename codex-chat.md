@@ -626,3 +626,16 @@ Avoid:
 Fetch only fields required for delivery.
 
 Keep memory usage bounded for 250-recipient batches.
+
+### User Prompt
+
+Update AnnouncementStats efficiently.
+
+Do not update the stats row after every recipient.
+
+For each batch:
+- calculate newly sent count
+- calculate newly failed count
+- atomically update stats once
+
+Retries and duplicate tasks must not double-count.

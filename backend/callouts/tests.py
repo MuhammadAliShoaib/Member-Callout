@@ -5,6 +5,7 @@ from unittest.mock import call, patch
 from uuid import uuid4
 
 from django.core.management import call_command
+from django.db.models import F
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
@@ -16,6 +17,7 @@ from callouts.ai import (
     validate_draft_response,
 )
 from callouts.models import Announcement, AnnouncementRecipient, Local, Member
+from callouts.models import AnnouncementStats
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
@@ -27,6 +29,7 @@ from callouts.tasks import (
     recipient_claim_stale_before,
     recipients_for_delivery,
     retry_countdown,
+    update_announcement_stats_for_delivery_batch,
 )
 from callouts.views import (
     AUDIENCE_QUERY_CHUNK_SIZE,
@@ -587,6 +590,65 @@ class DeliverAnnouncementsCommandTests(TestCase):
         return AnnouncementRecipient.objects.create(**defaults)
 
 
+class DeliveryStatsDatabaseTests(TestCase):
+    def test_duplicate_sent_transition_does_not_double_count_stats(self):
+        local = Local.objects.create(name='Local 27')
+        leader = self.member(local, 'leader@example.com', role=Member.Role.LEADER)
+        announcement = self.announcement(local, leader)
+        stats = AnnouncementStats.objects.create(
+            announcement=announcement,
+            local=local,
+            target_count=1,
+        )
+        recipient = self.recipient(announcement, self.member(local, 'member@example.com'))
+
+        update_announcement_stats_for_delivery_batch({
+            announcement_id: {'sent': sent_count, 'failed': 0}
+            for announcement_id, sent_count in mark_recipients_sent([recipient.id]).items()
+        })
+        update_announcement_stats_for_delivery_batch({
+            announcement_id: {'sent': sent_count, 'failed': 0}
+            for announcement_id, sent_count in mark_recipients_sent([recipient.id]).items()
+        })
+
+        stats.refresh_from_db()
+        self.assertEqual(stats.sent_count, 1)
+        self.assertEqual(stats.failed_count, 0)
+
+    def member(self, local, email, role=Member.Role.MEMBER):
+        return Member.objects.create_user(
+            email=email,
+            password='password',
+            local=local,
+            full_name=email,
+            classification='journeyman',
+            status=Member.Status.ACTIVE,
+            role=role,
+            is_active=True,
+        )
+
+    def announcement(self, local, created_by):
+        return Announcement.objects.create(
+            local=local,
+            created_by=created_by,
+            title='Meeting',
+            body='Meeting tonight.',
+            push_preview='Meeting tonight.',
+            status=Announcement.Status.QUEUED,
+            confirmed_content_hash='confirmed',
+        )
+
+    def recipient(self, announcement, member, **overrides):
+        defaults = {
+            'local': announcement.local,
+            'announcement': announcement,
+            'member': member,
+            'classification_snapshot': member.classification,
+        }
+        defaults.update(overrides)
+        return AnnouncementRecipient.objects.create(**defaults)
+
+
 class DeliveryTaskTests(SimpleTestCase):
     def test_recipient_batch_has_250_id_limit(self):
         recipient_ids = [str(number) for number in range(MAX_RECIPIENT_BATCH_SIZE + 1)]
@@ -605,12 +667,18 @@ class DeliveryTaskTests(SimpleTestCase):
 
     @patch('callouts.tasks.AnnouncementRecipient.objects')
     def test_successful_delivery_marks_sent_and_clears_claim(self, recipient_manager):
+        recipient_manager.filter.return_value.values_list.return_value = [
+            ('announcement-id', 'recipient-id'),
+        ]
+        recipient_manager.filter.return_value.update.return_value = 1
+
         mark_recipients_sent(['recipient-id'])
 
-        recipient_manager.filter.assert_called_once_with(
+        recipient_manager.filter.assert_any_call(
             id__in=['recipient-id'],
             delivery_status='pending',
         )
+        self.assertEqual(recipient_manager.filter.call_count, 2)
         recipient_manager.filter.return_value.update.assert_called_once()
         update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
         self.assertEqual(update_kwargs['delivery_status'], 'sent')
@@ -690,7 +758,23 @@ class DeliveryTaskTests(SimpleTestCase):
             ),
         )
 
-    @patch('callouts.tasks.mark_recipients_sent', return_value=1)
+    @patch('callouts.tasks.AnnouncementStats.objects')
+    def test_delivery_stats_update_uses_single_atomic_update_per_announcement(self, stats_manager):
+        update_announcement_stats_for_delivery_batch({
+            'announcement-id': {
+                'sent': 2,
+                'failed': 1,
+            },
+        })
+
+        stats_manager.filter.assert_called_once_with(announcement_id='announcement-id')
+        update_kwargs = stats_manager.filter.return_value.update.call_args.kwargs
+        self.assertEqual(update_kwargs['sent_count'], F('sent_count') + 2)
+        self.assertEqual(update_kwargs['failed_count'], F('failed_count') + 1)
+        self.assertIsNotNone(update_kwargs['updated_at'])
+
+    @patch('callouts.tasks.update_announcement_stats_for_delivery_batch')
+    @patch('callouts.tasks.mark_recipients_sent', return_value={'announcement-id': 1})
     @patch('callouts.tasks.mark_temporary_delivery_failure', return_value=(1, True))
     @patch('callouts.tasks.fake_push_delivery')
     @patch('callouts.tasks.claim_pending_recipients', return_value=['success-id', 'retry-id'])
@@ -702,9 +786,10 @@ class DeliveryTaskTests(SimpleTestCase):
         fake_push_delivery,
         mark_temporary_delivery_failure,
         mark_recipients_sent,
+        update_announcement_stats_for_delivery_batch,
     ):
-        success_recipient = SimpleNamespace(id='success-id', attempt_count=0)
-        retry_recipient = SimpleNamespace(id='retry-id', attempt_count=0)
+        success_recipient = SimpleNamespace(id='success-id', attempt_count=0, announcement_id='announcement-id')
+        retry_recipient = SimpleNamespace(id='retry-id', attempt_count=0, announcement_id='announcement-id')
         recipients_for_delivery.return_value = [
             success_recipient,
             retry_recipient,
@@ -715,6 +800,9 @@ class DeliveryTaskTests(SimpleTestCase):
             result = deliver_recipient_batch.run(['success-id', 'retry-id'])
 
         mark_recipients_sent.assert_called_once_with(['success-id'])
+        update_announcement_stats_for_delivery_batch.assert_called_once_with({
+            'announcement-id': {'sent': 1, 'failed': 0},
+        })
         apply_async.assert_called_once_with(args=[['retry-id']], countdown=1)
         self.assertEqual(result['processed'], 1)
         self.assertEqual(result['temporary_failures'], 1)
