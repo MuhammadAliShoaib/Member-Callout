@@ -2,6 +2,7 @@ from datetime import timedelta
 from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import call, patch
+from uuid import uuid4
 
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
@@ -24,6 +25,7 @@ from callouts.tasks import (
     mark_terminal_delivery_failure,
     mark_recipients_sent,
     recipient_claim_stale_before,
+    recipients_for_delivery,
     retry_countdown,
 )
 from callouts.views import (
@@ -668,14 +670,34 @@ class DeliveryTaskTests(SimpleTestCase):
         self.assertEqual(retry_countdown(2), 2)
         self.assertEqual(retry_countdown(3), 4)
 
+    def test_recipients_for_delivery_fetches_only_required_delivery_fields(self):
+        queryset = recipients_for_delivery([uuid4()])
+
+        self.assertEqual(queryset.query.select_related, {'announcement': {}, 'member': {}})
+        self.assertEqual(
+            queryset.query.deferred_loading,
+            (
+                frozenset({
+                    'id',
+                    'attempt_count',
+                    'announcement_id',
+                    'member_id',
+                    'announcement__title',
+                    'announcement__push_preview',
+                    'member__email',
+                }),
+                False,
+            ),
+        )
+
     @patch('callouts.tasks.mark_recipients_sent', return_value=1)
     @patch('callouts.tasks.mark_temporary_delivery_failure', return_value=(1, True))
     @patch('callouts.tasks.fake_push_delivery')
     @patch('callouts.tasks.claim_pending_recipients', return_value=['success-id', 'retry-id'])
-    @patch('callouts.tasks.AnnouncementRecipient.objects')
+    @patch('callouts.tasks.recipients_for_delivery')
     def test_temporary_failures_requeue_only_retryable_ids(
         self,
-        recipient_manager,
+        recipients_for_delivery,
         claim_pending_recipients,
         fake_push_delivery,
         mark_temporary_delivery_failure,
@@ -683,7 +705,7 @@ class DeliveryTaskTests(SimpleTestCase):
     ):
         success_recipient = SimpleNamespace(id='success-id', attempt_count=0)
         retry_recipient = SimpleNamespace(id='retry-id', attempt_count=0)
-        recipient_manager.select_related.return_value.filter.return_value = [
+        recipients_for_delivery.return_value = [
             success_recipient,
             retry_recipient,
         ]

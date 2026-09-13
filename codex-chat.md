@@ -613,3 +613,16 @@ Instead:
 - enqueue IDs to Celery in batches of 250
 
 Keep this command as a manual recovery/requeue mechanism.
+
+### User Prompt
+
+Optimize deliver_recipient_batch database access.
+
+Avoid:
+- N+1 queries
+- loading unnecessary columns
+- repeated announcement/member lookups
+
+Fetch only fields required for delivery.
+
+Keep memory usage bounded for 250-recipient batches.

@@ -47,6 +47,7 @@ def claim_pending_recipients(recipient_ids, claimed_by):
     with transaction.atomic():
         recipients = list(
             AnnouncementRecipient.objects.select_for_update(skip_locked=True)
+            .only('id', 'claimed_at', 'claimed_by')
             .filter(
                 id__in=recipient_ids,
                 delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
@@ -66,6 +67,25 @@ def claim_pending_recipients(recipient_ids, claimed_by):
         )
 
     return [recipient.id for recipient in recipients]
+
+
+def recipients_for_delivery(recipient_ids):
+    return (
+        AnnouncementRecipient.objects.select_related('announcement', 'member')
+        .only(
+            'id',
+            'attempt_count',
+            'announcement_id',
+            'member_id',
+            'announcement__title',
+            'announcement__push_preview',
+            'member__email',
+        )
+        .filter(
+            id__in=recipient_ids,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
+        )
+    )
 
 
 def mark_recipients_sent(recipient_ids):
@@ -132,12 +152,7 @@ def deliver_recipient_batch(recipient_ids):
         raise ValueError(f'deliver_recipient_batch accepts at most {batch_size} recipient IDs.')
 
     claimed_ids = claim_pending_recipients(recipient_ids, worker_id())
-    recipients = list(
-        AnnouncementRecipient.objects.select_related('announcement', 'member').filter(
-            id__in=claimed_ids,
-            delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
-        )
-    )
+    recipients = list(recipients_for_delivery(claimed_ids))
 
     delivered_ids = []
     retryable_ids = []
