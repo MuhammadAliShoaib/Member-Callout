@@ -190,6 +190,75 @@ def enqueue_recipient_delivery_batch(recipient_ids):
 
 
 @api_view(['GET'])
+def member_announcement_detail(request, announcement_id):
+    announcement = get_object_or_404(Announcement, id=announcement_id)
+    try:
+        recipient = AnnouncementRecipient.objects.get(
+            announcement=announcement,
+            member=request.user,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        )
+    except AnnouncementRecipient.DoesNotExist:
+        return Response(
+            {'detail': 'You are not a recipient of this announcement.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return Response({
+        'id': str(announcement.id),
+        'title': announcement.title,
+        'body': announcement.body,
+        'needs_ack': announcement.needs_ack,
+        'sent_at': recipient.sent_at,
+        'is_acknowledged': recipient.acknowledged_at is not None,
+    })
+
+
+@api_view(['POST'])
+def member_announcement_acknowledge(request, announcement_id):
+    announcement = get_object_or_404(Announcement, id=announcement_id)
+    try:
+        recipient = AnnouncementRecipient.objects.get(
+            announcement=announcement,
+            member=request.user,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        )
+    except AnnouncementRecipient.DoesNotExist:
+        return Response(
+            {'detail': 'You are not a recipient of this announcement.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if recipient.acknowledged_at is None:
+        now = timezone.now()
+        recipient.acknowledged_at = now
+        if recipient.read_at is None:
+            recipient.read_at = now
+        recipient.save(update_fields=['acknowledged_at', 'read_at'])
+    return Response({'is_acknowledged': True})
+
+
+@api_view(['GET'])
+def member_announcements(request):
+    recipients = (
+        AnnouncementRecipient.objects.filter(
+            member=request.user,
+            delivery_status=AnnouncementRecipient.DeliveryStatus.SENT,
+        )
+        .select_related('announcement')
+        .order_by('-sent_at')
+    )
+    return Response([
+        {
+            'id': str(r.announcement_id),
+            'title': r.announcement.title,
+            'sent_at': r.sent_at,
+            'is_read': r.read_at is not None,
+            'is_acknowledged': r.acknowledged_at is not None,
+        }
+        for r in recipients
+    ])
+
+
+@api_view(['GET'])
 @permission_classes([AllowAny])
 def health(request):
     return Response({'status': 'ok'})
@@ -232,9 +301,16 @@ def login(request):
     )
 
 
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsActiveLeaderInOwnLocal])
 def announcements(request):
+    if request.method == 'GET':
+        qs = (
+            for_request_local(Announcement.objects.all(), request)
+            .order_by('-created_at')
+        )
+        return Response(AnnouncementSerializer(qs, many=True).data)
+
     serializer = AnnouncementSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     announcement = serializer.save(

@@ -38,6 +38,7 @@ export interface Announcement {
   created_at: string;
   confirmed_at: string | null;
   queued_at: string | null;
+  sent_at: string | null;
 }
 
 export interface AIDraft {
@@ -62,6 +63,10 @@ export function apiLogin(email: string, password: string) {
     '/api/login/',
     { method: 'POST', body: JSON.stringify({ email, password }) },
   );
+}
+
+export function apiListAnnouncements(token: string) {
+  return request<Announcement[]>('/api/announcements/', {}, token);
 }
 
 export function apiCreateAnnouncement(
@@ -125,6 +130,35 @@ export function apiSendAnnouncement(token: string, id: string) {
     { method: 'POST' },
     token,
   );
+}
+
+export interface MemberAnnouncement {
+  id: string;
+  title: string;
+  sent_at: string;
+  is_read: boolean;
+  is_acknowledged: boolean;
+}
+
+export function apiGetMemberAnnouncements(token: string) {
+  return request<MemberAnnouncement[]>('/api/member/announcements/', {}, token);
+}
+
+export interface MemberAnnouncementDetail {
+  id: string;
+  title: string;
+  body: string;
+  needs_ack: boolean;
+  sent_at: string;
+  is_acknowledged: boolean;
+}
+
+export function apiGetMemberAnnouncement(token: string, id: string) {
+  return request<MemberAnnouncementDetail>(`/api/member/announcements/${id}/`, {}, token);
+}
+
+export function apiAcknowledgeMemberAnnouncement(token: string, id: string) {
+  return request<{ is_acknowledged: boolean }>(`/api/member/announcements/${id}/acknowledge/`, { method: 'POST' }, token);
 }
 
 export function apiGetAnnouncementStats(token: string, id: string) {

@@ -20,6 +20,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'created_at',
             'confirmed_at',
             'queued_at',
+            'sent_at',
         ]
         read_only_fields = [
             'id',
@@ -30,4 +31,5 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'created_at',
             'confirmed_at',
             'queued_at',
+            'sent_at',
         ]

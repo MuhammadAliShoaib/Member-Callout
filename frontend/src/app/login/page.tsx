@@ -3,7 +3,7 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiLogin } from '@/lib/api';
-import { getToken, setAuth } from '@/lib/auth';
+import { getToken, getMember, setAuth } from '@/lib/auth';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,7 +13,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (getToken()) router.replace('/announcements');
+    if (getToken()) {
+      const m = getMember();
+      router.replace(m?.role === 'leader' ? '/announcements' : '/member/announcements');
+    }
   }, [router]);
 
   async function handleSubmit(e: FormEvent) {
@@ -23,7 +26,7 @@ export default function LoginPage() {
     try {
       const { token, member } = await apiLogin(email, password);
       setAuth(token, member);
-      router.replace('/announcements');
+      router.replace(member.role === 'leader' ? '/announcements' : '/member/announcements');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed.');
     } finally {

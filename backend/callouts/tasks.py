@@ -232,12 +232,15 @@ def add_stats_count(stats_counts, announcement_id, field, count):
 
 
 def fake_push_delivery(recipient):
-    logger.info(
-        'Fake push: %s | %s | %s',
-        recipient.member.email,
-        recipient.announcement.title,
-        recipient.announcement.push_preview,
-    )
+    payload = {
+        'to': recipient.member.email,
+        'title': recipient.announcement.title,
+        'body': recipient.announcement.push_preview,
+        'deep_link': (
+            f'{settings.FRONTEND_URL}/member/announcements/{recipient.announcement_id}'
+        ),
+    }
+    logger.info('Fake push notification: %s', payload)
 
 
 @shared_task

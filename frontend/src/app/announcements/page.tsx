@@ -1,13 +1,43 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiCreateAnnouncement, apiAIDraft, apiConfirmAnnouncement, type Announcement, type AIDraft } from '@/lib/api';
+import {
+  apiListAnnouncements,
+  apiCreateAnnouncement,
+  apiAIDraft,
+  apiConfirmAnnouncement,
+  apiGetAnnouncementStats,
+  type Announcement,
+  type AIDraft,
+  type AnnouncementStats,
+} from '@/lib/api';
 import { getToken, getMember, clearAuth } from '@/lib/auth';
+
+const STATUS_LABEL: Record<Announcement['status'], string> = {
+  draft: 'Draft',
+  confirmed: 'Confirmed',
+  queued: 'Queued',
+  sent: 'Sent',
+};
+
+function announcementDate(a: Announcement): string {
+  const date = a.status === 'sent' && a.sent_at ? a.sent_at : a.created_at;
+  const label = a.status === 'sent' && a.sent_at ? 'Sent' : 'Created';
+  return `${label} ${new Date(date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+}
 
 export default function AnnouncementsPage() {
   const router = useRouter();
   const [member, setMember] = useState<ReturnType<typeof getMember>>(null);
+
+  const [list, setList] = useState<Announcement[]>([]);
+  const [listError, setListError] = useState('');
+
+  const [panel, setPanel] = useState<Announcement | null>(null);
+  const [panelStats, setPanelStats] = useState<AnnouncementStats | null>(null);
+  const [panelStatsLoading, setPanelStatsLoading] = useState(false);
+  const [panelStatsError, setPanelStatsError] = useState('');
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -30,6 +60,71 @@ export default function AnnouncementsPage() {
   const [confirmError, setConfirmError] = useState('');
   const [confirmSuccess, setConfirmSuccess] = useState(false);
 
+  const loadList = useCallback(async (token: string) => {
+    try {
+      setList(await apiListAnnouncements(token));
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : 'Failed to load announcements.');
+    }
+  }, []);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) { router.replace('/login'); return; }
+    setMember(getMember());
+    loadList(token);
+  }, [router, loadList]);
+
+  async function loadPanelStats(id: string) {
+    const token = getToken();
+    if (!token) return;
+    setPanelStatsLoading(true);
+    setPanelStatsError('');
+    try {
+      setPanelStats(await apiGetAnnouncementStats(token, id));
+    } catch (err) {
+      setPanelStatsError(err instanceof Error ? err.message : 'Failed to load stats.');
+    } finally {
+      setPanelStatsLoading(false);
+    }
+  }
+
+  function openPanel(a: Announcement) {
+    setPanel(a);
+    setPanelStats(null);
+    setPanelStatsError('');
+    if (a.status === 'queued' || a.status === 'sent') {
+      loadPanelStats(a.id);
+    }
+  }
+
+  function closePanel() {
+    setPanel(null);
+    setPanelStats(null);
+    setPanelStatsError('');
+  }
+
+  // Auto-poll stats while delivery is in progress.
+  // Stops when sent + failed reaches the target, or when the panel closes.
+  useEffect(() => {
+    if (panel?.status !== 'queued') return;
+    const announcementId = panel.id;
+
+    const intervalId = setInterval(async () => {
+      const token = getToken();
+      if (!token) return;
+      try {
+        const stats = await apiGetAnnouncementStats(token, announcementId);
+        setPanelStats(stats);
+        if (stats.target_count > 0 && stats.sent_count + stats.failed_count >= stats.target_count) {
+          clearInterval(intervalId);
+        }
+      } catch { /* silently ignore poll errors */ }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [panel?.id, panel?.status]);
+
   async function handleAIDraft() {
     const token = getToken();
     if (!token || !aiNote.trim()) return;
@@ -42,7 +137,6 @@ export default function AnnouncementsPage() {
       const draft = await apiAIDraft(token, aiNote.trim());
       if (id !== aiGeneration.current) return;
       if (editVersion.current !== versionAtStart) {
-        // User edited the fields while AI was generating — require explicit apply
         setAiPending(draft);
       } else {
         setTitle(draft.title);
@@ -64,12 +158,6 @@ export default function AnnouncementsPage() {
     setPushPreview(aiPending.push_preview);
     setAiPending(null);
   }
-
-  useEffect(() => {
-    const token = getToken();
-    if (!token) { router.replace('/login'); return; }
-    setMember(getMember());
-  }, [router]);
 
   async function handleConfirm() {
     if (!result) return;
@@ -105,12 +193,15 @@ export default function AnnouncementsPage() {
         needs_ack: needsAck,
       });
       setResult({ id: a.id, status: a.status });
+      loadList(token);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create announcement.');
     } finally {
       setLoading(false);
     }
   }
+
+  const hasStats = panel?.status === 'queued' || panel?.status === 'sent';
 
   return (
     <>
@@ -132,8 +223,108 @@ export default function AnnouncementsPage() {
       </header>
 
       <main className="container page">
-        <h1 className="page-title">New Announcement</h1>
+        <h1 className="page-title">Announcements</h1>
 
+        {/* List */}
+        {listError && <p style={{ color: 'var(--danger)', marginBottom: 16 }}>{listError}</p>}
+        {list.length > 0 && (
+          <div className="card" style={{ marginBottom: 24, padding: 0 }}>
+            {list.map((a, i) => (
+              <div
+                key={a.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 16,
+                  padding: '14px 20px',
+                  borderBottom: i < list.length - 1 ? '1px solid var(--border)' : undefined,
+                  flexWrap: 'wrap',
+                  background: panel?.id === a.id ? 'var(--bg)' : undefined,
+                }}
+              >
+                <span style={{ flex: 1, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {a.title}
+                </span>
+                <span style={{ fontSize: '0.875rem', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                  {STATUS_LABEL[a.status]}
+                </span>
+                <span style={{ fontSize: '0.875rem', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                  {announcementDate(a)}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => panel?.id === a.id ? closePanel() : openPanel(a)}
+                >
+                  {panel?.id === a.id ? 'Close' : 'View Details'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Details panel */}
+        {panel && (
+          <div className="card" style={{ marginBottom: 32 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, gap: 16 }}>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{panel.title}</h2>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={closePanel} style={{ flexShrink: 0 }}>
+                Close
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: '0.9rem' }}>
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                <span><strong>Status:</strong> {STATUS_LABEL[panel.status]}</span>
+                <span><strong>{panel.status === 'sent' && panel.sent_at ? 'Sent' : 'Created'}:</strong>{' '}
+                  {new Date(panel.status === 'sent' && panel.sent_at ? panel.sent_at : panel.created_at)
+                    .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <span><strong>Classification:</strong> {panel.target_classification || 'All members'}</span>
+                <span><strong>Needs acknowledgement:</strong> {panel.needs_ack ? 'Yes' : 'No'}</span>
+              </div>
+
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: 4 }}>Push preview</p>
+                <p style={{ color: 'var(--muted)' }}>{panel.push_preview}</p>
+              </div>
+
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: 4 }}>Body</p>
+                <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{panel.body}</p>
+              </div>
+
+              {hasStats && (
+                <div style={{ paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                    <p style={{ fontWeight: 600 }}>Delivery</p>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => loadPanelStats(panel.id)}
+                      disabled={panelStatsLoading}
+                    >
+                      {panelStatsLoading ? 'Loading…' : 'Refresh Stats'}
+                    </button>
+                  </div>
+                  {panelStatsError && <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>{panelStatsError}</p>}
+                  {panelStats && (
+                    <div style={{ fontSize: '0.9rem', lineHeight: 2 }}>
+                      <p>Target: {panelStats.target_count.toLocaleString()}</p>
+                      <p>Sent: {panelStats.sent_count.toLocaleString()}</p>
+                      <p>Failed: {panelStats.failed_count.toLocaleString()}</p>
+                      <p>Read: {panelStats.read_count.toLocaleString()}</p>
+                      <p>Acknowledged: {panelStats.acknowledged_count.toLocaleString()}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* New announcement */}
+        <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 16 }}>New Announcement</h2>
         <div className="card">
           <div style={{ marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid var(--border)' }}>
             <p style={{ fontWeight: 600, marginBottom: 10 }}>Improve with AI</p>
@@ -250,8 +441,10 @@ export default function AnnouncementsPage() {
 
           {result && (
             <div style={{ marginTop: 16, fontSize: '0.9rem', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <p><strong>ID:</strong> <code>{result.id}</code></p>
-              <p><strong>Status:</strong> {result.status}</p>
+              <p>
+                <strong>Status:</strong> {result.status} —{' '}
+                <a href={`/announcements/${result.id}`} style={{ color: 'var(--primary)' }}>Edit</a>
+              </p>
               {confirmSuccess && (
                 <p style={{ color: '#16a34a' }}>Content confirmed</p>
               )}

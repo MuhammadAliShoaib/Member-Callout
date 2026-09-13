@@ -37,6 +37,8 @@ ALLOWED_HOSTS = env_list('ALLOWED_HOSTS')
 
 CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
 
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
 AI_PROVIDER = os.environ.get('AI_PROVIDER', 'fake')
 AI_API_KEY = os.environ.get('AI_API_KEY', '')
 

@@ -25,6 +25,9 @@ from callouts.views import (
     announcements,
     health,
     login,
+    member_announcement_acknowledge,
+    member_announcement_detail,
+    member_announcements,
 )
 
 urlpatterns = [
@@ -37,4 +40,7 @@ urlpatterns = [
     path('api/announcements/<uuid:announcement_id>/send/', announcement_send, name='announcement-send'),
     path('api/announcements/<uuid:announcement_id>/stats/', announcement_stats, name='announcement-stats'),
     path('api/announcements/<uuid:announcement_id>/', announcement_detail, name='announcement-detail'),
+    path('api/member/announcements/', member_announcements, name='member-announcements'),
+    path('api/member/announcements/<uuid:announcement_id>/', member_announcement_detail, name='member-announcement-detail'),
+    path('api/member/announcements/<uuid:announcement_id>/acknowledge/', member_announcement_acknowledge, name='member-announcement-acknowledge'),
 ]
