@@ -16,11 +16,13 @@ from callouts.models import Announcement, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
 from callouts.tasks import (
     MAX_RECIPIENT_BATCH_SIZE,
+    TemporaryDeliveryError,
     deliver_recipient_batch,
     mark_temporary_delivery_failure,
     mark_terminal_delivery_failure,
     mark_recipients_sent,
     recipient_claim_stale_before,
+    retry_countdown,
 )
 from callouts.views import (
     announcement_audience_filters,
@@ -287,7 +289,7 @@ class DeliveryTaskTests(SimpleTestCase):
         recipient = SimpleNamespace(id='recipient-id', attempt_count=0)
 
         with self.settings(MAX_DELIVERY_ATTEMPTS=3):
-            mark_temporary_delivery_failure(recipient, RuntimeError('temporary outage'))
+            updated, retryable = mark_temporary_delivery_failure(recipient, RuntimeError('temporary outage'))
 
         recipient_manager.filter.assert_called_once_with(
             id='recipient-id',
@@ -298,16 +300,20 @@ class DeliveryTaskTests(SimpleTestCase):
         self.assertEqual(update_kwargs['last_error'], 'temporary outage')
         self.assertIsNone(update_kwargs['claimed_at'])
         self.assertIsNone(update_kwargs['claimed_by'])
+        self.assertEqual(updated, recipient_manager.filter.return_value.update.return_value)
+        self.assertTrue(retryable)
 
     @patch('callouts.tasks.AnnouncementRecipient.objects')
     def test_temporary_failure_at_max_attempts_marks_failed(self, recipient_manager):
         recipient = SimpleNamespace(id='recipient-id', attempt_count=2)
 
         with self.settings(MAX_DELIVERY_ATTEMPTS=3):
-            mark_temporary_delivery_failure(recipient, RuntimeError('temporary outage'))
+            updated, retryable = mark_temporary_delivery_failure(recipient, RuntimeError('temporary outage'))
 
         update_kwargs = recipient_manager.filter.return_value.update.call_args.kwargs
         self.assertEqual(update_kwargs['delivery_status'], 'failed')
+        self.assertEqual(updated, recipient_manager.filter.return_value.update.return_value)
+        self.assertFalse(retryable)
 
     @patch('callouts.tasks.AnnouncementRecipient.objects')
     def test_terminal_failure_marks_failed_and_clears_claim(self, recipient_manager):
@@ -324,3 +330,38 @@ class DeliveryTaskTests(SimpleTestCase):
         self.assertEqual(update_kwargs['last_error'], 'bad token')
         self.assertIsNone(update_kwargs['claimed_at'])
         self.assertIsNone(update_kwargs['claimed_by'])
+
+    def test_retry_countdown_uses_exponential_backoff(self):
+        self.assertEqual(retry_countdown(1), 1)
+        self.assertEqual(retry_countdown(2), 2)
+        self.assertEqual(retry_countdown(3), 4)
+
+    @patch('callouts.tasks.mark_recipients_sent', return_value=1)
+    @patch('callouts.tasks.mark_temporary_delivery_failure', return_value=(1, True))
+    @patch('callouts.tasks.fake_push_delivery')
+    @patch('callouts.tasks.claim_pending_recipients', return_value=['success-id', 'retry-id'])
+    @patch('callouts.tasks.AnnouncementRecipient.objects')
+    def test_temporary_failures_requeue_only_retryable_ids(
+        self,
+        recipient_manager,
+        claim_pending_recipients,
+        fake_push_delivery,
+        mark_temporary_delivery_failure,
+        mark_recipients_sent,
+    ):
+        success_recipient = SimpleNamespace(id='success-id', attempt_count=0)
+        retry_recipient = SimpleNamespace(id='retry-id', attempt_count=0)
+        recipient_manager.select_related.return_value.filter.return_value = [
+            success_recipient,
+            retry_recipient,
+        ]
+        fake_push_delivery.side_effect = [None, TemporaryDeliveryError('try again')]
+
+        with patch.object(deliver_recipient_batch, 'apply_async') as apply_async:
+            result = deliver_recipient_batch.run(['success-id', 'retry-id'])
+
+        mark_recipients_sent.assert_called_once_with(['success-id'])
+        apply_async.assert_called_once_with(args=[['retry-id']], countdown=1)
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['temporary_failures'], 1)
+        self.assertEqual(result['retryable'], 1)

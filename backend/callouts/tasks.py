@@ -13,6 +13,7 @@ from callouts.models import AnnouncementRecipient
 logger = logging.getLogger(__name__)
 
 MAX_RECIPIENT_BATCH_SIZE = 250
+MAX_RETRY_BACKOFF_SECONDS = 300
 
 
 class TemporaryDeliveryError(Exception):
@@ -29,6 +30,10 @@ def worker_id():
 
 def recipient_claim_stale_before(now):
     return now - timedelta(seconds=settings.RECIPIENT_CLAIM_TIMEOUT_SECONDS)
+
+
+def retry_countdown(attempt_count):
+    return min(2 ** max(attempt_count - 1, 0), MAX_RETRY_BACKOFF_SECONDS)
 
 
 def claim_pending_recipients(recipient_ids, claimed_by):
@@ -76,11 +81,12 @@ def mark_recipients_sent(recipient_ids):
 def mark_temporary_delivery_failure(recipient, error):
     next_attempt_count = recipient.attempt_count + 1
     delivery_status = AnnouncementRecipient.DeliveryStatus.PENDING
+    retryable = next_attempt_count < settings.MAX_DELIVERY_ATTEMPTS
 
-    if next_attempt_count >= settings.MAX_DELIVERY_ATTEMPTS:
+    if not retryable:
         delivery_status = AnnouncementRecipient.DeliveryStatus.FAILED
 
-    return AnnouncementRecipient.objects.filter(
+    updated = AnnouncementRecipient.objects.filter(
         id=recipient.id,
         delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
     ).update(
@@ -90,6 +96,7 @@ def mark_temporary_delivery_failure(recipient, error):
         claimed_at=None,
         claimed_by=None,
     )
+    return updated, retryable
 
 
 def mark_terminal_delivery_failure(recipient, error):
@@ -127,6 +134,7 @@ def deliver_recipient_batch(recipient_ids):
     )
 
     delivered_ids = []
+    retryable_ids = []
     temporary_failures = 0
     terminal_failures = 0
 
@@ -134,7 +142,10 @@ def deliver_recipient_batch(recipient_ids):
         try:
             fake_push_delivery(recipient)
         except TemporaryDeliveryError as exc:
-            temporary_failures += mark_temporary_delivery_failure(recipient, exc)
+            updated, retryable = mark_temporary_delivery_failure(recipient, exc)
+            temporary_failures += updated
+            if updated and retryable:
+                retryable_ids.append(recipient.id)
         except TerminalDeliveryError as exc:
             terminal_failures += mark_terminal_delivery_failure(recipient, exc)
         else:
@@ -142,8 +153,16 @@ def deliver_recipient_batch(recipient_ids):
 
     processed = mark_recipients_sent(delivered_ids)
 
+    if retryable_ids:
+        next_attempt_count = min(recipient.attempt_count + 1 for recipient in recipients if recipient.id in retryable_ids)
+        deliver_recipient_batch.apply_async(
+            args=[[str(recipient_id) for recipient_id in retryable_ids]],
+            countdown=retry_countdown(next_attempt_count),
+        )
+
     return {
         'processed': processed,
         'temporary_failures': temporary_failures,
         'terminal_failures': terminal_failures,
+        'retryable': len(retryable_ids),
     }

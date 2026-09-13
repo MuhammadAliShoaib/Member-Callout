@@ -501,3 +501,15 @@ On terminal failure:
 - clear the claim
 
 Maximum attempts must be configurable.
+
+### User Prompt
+
+Add selective retries.
+
+If some recipients in a batch fail temporarily:
+- do not retry successful recipients
+- collect only retryable recipient IDs
+- requeue those IDs
+- use exponential backoff
+
+Never retry the entire original batch unnecessarily.
