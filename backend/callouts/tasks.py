@@ -1,8 +1,11 @@
 import logging
 import socket
+from datetime import timedelta
 
 from celery import shared_task
+from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from callouts.models import AnnouncementRecipient
@@ -16,8 +19,13 @@ def worker_id():
     return socket.gethostname()
 
 
+def recipient_claim_stale_before(now):
+    return now - timedelta(seconds=settings.RECIPIENT_CLAIM_TIMEOUT_SECONDS)
+
+
 def claim_pending_recipients(recipient_ids, claimed_by):
     now = timezone.now()
+    stale_before = recipient_claim_stale_before(now)
 
     with transaction.atomic():
         recipients = list(
@@ -25,8 +33,8 @@ def claim_pending_recipients(recipient_ids, claimed_by):
             .filter(
                 id__in=recipient_ids,
                 delivery_status=AnnouncementRecipient.DeliveryStatus.PENDING,
-                claimed_at__isnull=True,
             )
+            .filter(Q(claimed_at__isnull=True) | Q(claimed_at__lt=stale_before))
         )
 
         for recipient in recipients:

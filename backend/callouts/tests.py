@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase
@@ -12,7 +13,11 @@ from callouts.ai import (
 )
 from callouts.models import Announcement, Local, Member
 from callouts.permissions import IsActiveLeaderInOwnLocal
-from callouts.tasks import MAX_RECIPIENT_BATCH_SIZE, deliver_recipient_batch
+from callouts.tasks import (
+    MAX_RECIPIENT_BATCH_SIZE,
+    deliver_recipient_batch,
+    recipient_claim_stale_before,
+)
 from callouts.views import (
     announcement_audience_filters,
     announcement_content_hash,
@@ -251,3 +256,9 @@ class DeliveryTaskTests(SimpleTestCase):
 
     def test_delivery_task_accepts_ids_only_argument(self):
         self.assertEqual(deliver_recipient_batch.name, 'callouts.tasks.deliver_recipient_batch')
+
+    def test_recipient_claim_timeout_controls_stale_cutoff(self):
+        now = timezone.now()
+
+        with self.settings(RECIPIENT_CLAIM_TIMEOUT_SECONDS=60):
+            self.assertEqual(recipient_claim_stale_before(now), now - timedelta(seconds=60))

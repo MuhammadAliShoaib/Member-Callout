@@ -458,3 +458,15 @@ Before delivery:
 Use PostgreSQL locking/atomic updates.
 
 Do not hold a DB transaction during the external push call.
+
+### User Prompt
+
+Add stale claim recovery.
+
+If a recipient:
+- is pending
+- has claimed_at older than the configured claim timeout
+
+allow another worker to reclaim it.
+
+Make the claim timeout configurable.
