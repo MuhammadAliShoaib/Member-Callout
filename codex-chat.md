@@ -679,3 +679,23 @@ Test:
 6. stale claim recovery
 
 Verify final delivery_status and attempt_count.
+
+### User Prompt
+
+Add Redis to docker-compose.yml.
+
+Use Redis as the Celery broker.
+
+Add a health check.
+
+Do not expose Redis publicly unless required.
+
+Add a Celery worker service to Docker Compose.
+
+Use the Django backend image.
+
+Start with:
+
+celery -A config worker --loglevel=info
+
+Wait for healthy PostgreSQL and Redis.
